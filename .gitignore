@@ -1,0 +1,36 @@
+old_files/
+SOM/
+unilm/
+
+
+## ignore data files in the filteration pipeline
+data_filteration/data/
+data_filteration/filtered_results/
+data_filteration/filtered_results_seed_bench/
+data_filteration/seed_bench_filtered/
+data_filteration/copy_images_from_json.py
+
+
+## files and folders to ignore in scenetap folder
+scenetap/data/
+scenetap/automated_filtered_data/
+scenetap/cache/
+scenetap/log*/
+scenetap/*.log
+scenetap/*.json
+scenetap/SOM/
+scenetap/som_images/
+scenetap/*.backup
+scenetap/*.out
+scenetap/*.zip
+
+
+## vlms folder 
+vlms/filtered_data/
+vlms/results/
+vlms/test_data/
+vlms/vlms_interp1/
+vlms/fix_json_files.py
+vlms/infere.py
+vlms/*.json
+vlms/activations_analysis/
