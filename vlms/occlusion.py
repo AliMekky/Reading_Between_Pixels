@@ -1,6 +1,3 @@
-I have conducted the following experiment, can you explain it?
-
-```
 # import json
 # from pathlib import Path
 # from typing import Dict, List
@@ -1843,4 +1840,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
