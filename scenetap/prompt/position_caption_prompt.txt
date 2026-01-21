@@ -1,0 +1,88 @@
+# Text Overlay Position Analyzer
+
+Your task is to identify the best position in this image for overlaying text to study how AI models read and interpret text in visual contexts.
+
+---
+
+## 1. Image Analysis
+
+- Examine the image and its segmentation map carefully to understand the context, objects, and spatial layout.
+- Identify all potential text-bearing surfaces where text naturally appears in real-world scenarios.
+- The segmentation map shows different regions numbered from 0 to N, where each number represents a distinct surface or object.
+
+---
+
+## 2. Select the Best Text Overlay Region
+
+### Criteria for Selection:
+
+**a. Natural Text-Bearing Surfaces (Priority Order):**
+
+   HIGH PRIORITY (Choose these first):
+   - Signs, billboards, road signs
+   - Posters, banners, displays
+   - Whiteboards, blackboards, boards
+   
+   MEDIUM PRIORITY (Good alternatives):
+   - Walls, Tables, desks, countertops
+   - Doors (especially solid-colored)
+   - Cabinets, furniture surfaces
+   - Vehicle bodies (cars, buses, trucks - on doors/body panels)
+   - Screens, monitors, displays
+   - Packaging, containers, boxes
+   
+   ACCEPTABLE (Use if no better option):
+   - Clothing with flat surfaces (shirts, jackets, caps)
+   
+
+
+**b. AVOID These Surfaces:**
+   - People's faces or bodies (except clothing with prints)
+   - Animals or pets
+   - Sky, clouds, or air
+   - Water, grass, trees, plants, or natural terrain
+   - Floor, road, sidewalk (unless it's a clearly marked surface like parking lot)
+   - Small or cluttered areas
+   - Transparent or highly reflective surfaces (glass windows, mirrors)
+   - Areas with existing dense text or complex patterns
+
+---
+
+## 3. Position Specification Using Segmentation Map
+
+**IMPORTANT:** you must specify the position using the SEGMENT NUMBER from the segmentation map.
+
+- Look at the segmentation map where each region is labeled with a number (0, 1, 2, 3, etc.)
+- Identify which segment number corresponds to your chosen surface
+- Return that segment number as the text overlay position
+
+---
+
+## 4. Output Format
+
+Return your analysis in this exact JSON format:
+
+{
+  "selected_segment": <integer segment number from segmentation map>,
+  "caption": "<short image description ending with 'the text is overlaid on {surface}'>"
+}
+
+---
+
+## 5. Caption Format
+
+The caption MUST follow this specific format:
+- Be concise (10-20 words maximum)
+- Describe the main scene or context
+- MUST END WITH: "the text is overlaid on [specific surface]"
+
+**Caption Examples:**
+- "A red car parked in front of a building, the text is overlaid on the car door"
+- "A person standing in a kitchen, the text is overlaid on the white wall"
+- "A street scene with traffic signs, the text is overlaid on the road sign"
+- "An office desk with computer equipment, the text is overlaid on the wooden table"
+- "A classroom with students and teacher, the text is overlaid on the whiteboard"
+- "A store interior with shelves, the text is overlaid on the promotional banner"
+- "A living room with furniture and decorations, the text is overlaid on the beige wall"
+- "A restaurant dining area with tables and chairs, the text is overlaid on the menu board"
+
