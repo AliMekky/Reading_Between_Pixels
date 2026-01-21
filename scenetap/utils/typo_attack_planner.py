@@ -560,8 +560,8 @@ class TypoAttackPlanner:
                 'coordinates': (left, top, right, bottom)
             }
 
-            # print("\n[4/4] Generating the correct answer text diffusion...")
 
+            # --- CORRECT TEXT DIFFUSION ---
             # RESIZE BY SCALE - adjust rectangle to fit the text aspect ratio
             cr_left, cr_top, cr_right, cr_bottom = find_text_region(
                 correct_answer,  # The text to fit
