@@ -120,7 +120,7 @@ class TypoAttackPlanner:
             self.random_words = json.load(f)
         
 
-    def attack_all_three_variants(self, image_path, question, correct_answer, options, model="gpt-4o-2024-08-06", FIXED_POSITION_CACHE=None):
+    def generate_variants(self, image_path, question, correct_answer, options, model="gpt-4o-2024-08-06", FIXED_POSITION_CACHE=None):
             """
             Generate all three text variants using the SAME text_position_number.
             Returns supporting, misleading, and irrelevant plans with identical positions.

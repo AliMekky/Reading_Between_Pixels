@@ -107,10 +107,11 @@ if __name__ == "__main__":
         lingo_judge = None
 
     # Attack planner
-    if args.attack == "SceneTAP":
+    if args.attack == "SceneTAP" or args.attack == "TextAnalysis":
         som_base_path = "./som_images"
         som_image_folder = os.path.join(som_base_path, args.dataset, f"slider_{args.slider}", f"seed_{args.seed}", f"filter_{args.filter}")
         typo_attack_planner = TypoAttackPlanner(som_image_folder)
+        
 
     # Load the questions
     with open(args.question_file, 'r') as f:
@@ -132,6 +133,7 @@ if __name__ == "__main__":
 
         question = data["text"]
         correct_answer = data["answer"]
+        options = data['options']
 
         if args.attack == "SceneTAP":
             images, seg_image, plan_detail_origin, plan_detail = typo_attack_planner.attack(
@@ -147,60 +149,19 @@ if __name__ == "__main__":
             os.makedirs(image_save_dir_diffusion, exist_ok=True)
             for k, img in enumerate(images):
                 img.save(os.path.join(image_save_dir_diffusion, f"{k}.jpg"))
+        
+        elif args.attack == "TextAnalysis":
+            results = typo_attack_planner.generate_variants(image_path, question, correct_answer, options, model="gpt-4o-2024-08-06")
+            for variant in ["misleading", "irrelevant", "correct"]:
+                images = results[variant]['diffusion_images']
+                image = images[0]
+                image.save(os.path.join(image_save_dir, f"{image_name_save.replace('.jpg', f'_{variant}.jpg')}"))
+                # diffusion save path
+                image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion",
+                                                        f"{image_name_save.replace('.jpg', '')}_{variant}")
+                os.makedirs(image_save_dir_diffusion, exist_ok=True)
+                for k, img in enumerate(images):
+                    img.save(os.path.join(image_save_dir_diffusion, f"{k}.jpg"))
         else:
             image = Image.open(image_path).convert("RGB")
             images = [image]
-
-        # Get the answer
-        output_list = []
-        judge_list = []
-        for image in images:
-            base64_image = pil_to_base64(image)
-            completion_request = CompletionRequest(model=args.model, temperature=args.temperature,
-                                                   max_tokens=args.max_tokens, top_p=args.top_p)
-            completion_request.add_user_message_test(text=question, base64_image=[base64_image], image_first=True, detail="auto")
-            completion = completion_request.get_completion_payload()
-            answer = completion.choices[0].message.content
-
-            answer = answer.lower()
-            output_list.append(answer)
-            judge_list.append(is_correct_answer(answer, correct_answer, question, args.dataset, lingo_judge=lingo_judge))
-
-        # Save the answer
-        if not(False in judge_list):
-            correct += 1
-            log_data = {"question_id": question_id,
-                        "image": data["image"],
-                        "text": question,
-                        "outputs": output_list,
-                        "answer": correct_answer,
-                        "plan_detail_origin": format_instance_json(
-                            plan_detail_origin) if args.attack == "SceneTAP" else None,
-                        "plan_detail": format_instance_json(plan_detail) if args.attack == "SceneTAP" else None,
-                        "judge_list": judge_list,
-                        "is_correct": True
-                        }
-            ans_file_list.append(log_data)
-            logger.info(log_data)
-
-        else:
-            log_data = {"question_id": question_id,
-                        "image": data["image"],
-                        "text": question,
-                        "outputs": output_list,
-                        "answer": correct_answer,
-                        "plan_detail_origin": format_instance_json(
-                            plan_detail_origin) if args.attack == "SceneTAP" else None,
-                        "plan_detail": format_instance_json(plan_detail) if args.attack == "SceneTAP" else None,
-                        "judge_list": judge_list,
-                        "is_correct": False
-                        }
-            ans_file_list.append(log_data)
-            logger.info(log_data)
-        total += 1
-
-    ans_file.write(json.dumps(ans_file_list, indent=2))
-    ans_file.close()
-    logger.info(f"Correct: {correct}/{total}")
-    logger.info(f"Accuracy: {correct / total}")
-    logger.info(f"ASR: {(total - correct) / total}")
