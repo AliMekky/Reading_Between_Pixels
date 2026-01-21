@@ -40,11 +40,11 @@ if __name__ == "__main__":
         questions = json.load(f)
 
     # SoM
-    semsam_cfg = "SoM/configs/semantic_sam_only_sa-1b_swinL.yaml"
-    seem_cfg = "SoM/configs/seem_focall_unicl_lang_v1.yaml"
-    semsam_ckpt = "SoM/swinl_only_sam_many2many.pth"
-    sam_ckpt = "SoM/sam_vit_h_4b8939.pth"
-    seem_ckpt = "SoM/seem_focall_v1.pt"
+    semsam_cfg = "../SoM/configs/semantic_sam_only_sa-1b_swinL.yaml"
+    seem_cfg = "../SoM/configs/seem_focall_unicl_lang_v1.yaml"
+    semsam_ckpt = "../SoM/swinl_only_sam_many2many.pth"
+    sam_ckpt = "../SoM/sam_vit_h_4b8939.pth"
+    seem_ckpt = "../SoM/seem_focall_v1.pt"
 
     som = SoM(semsam_cfg, seem_cfg, semsam_ckpt, sam_ckpt, seem_ckpt)
     image_set = set()
