@@ -1,21 +1,19 @@
 import base64
 import os
 import time
-from io import BytesIO
-
 import cv2
 import numpy as np
 import torch
-from PIL import Image, ImageDraw, ImageFont
+import json
+from datetime import datetime
 
-# Function to encode the image
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
 
 from utils.get_rectangle_by_mask import largest_inscribed_rectangle
 # from utils.som import SoM
 from utils.completion_request import CompletionRequest
-
-
 from utils.text_diffuser import TextDiffuser
 
 
@@ -48,6 +46,17 @@ def format_instance_json(instance):
     values = {attr: getattr(instance, attr) for attr in attributes}
 
     return values
+
+def load_cache(image_path):
+    """Load cached data for an image if it exists."""
+    image_name = os.path.basename(image_path)
+    image_name_base = os.path.splitext(image_name)[0]
+    cache_file = f"./cache/{image_name_base}_cache.json"
+    
+    if os.path.exists(cache_file):
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return None
 
 
 def find_text_region(text, left, top, right, bottom, font_path='./fonts/arialbd.ttf', font_size=20, aspect_ratio_threshold=0.1):
@@ -222,4 +231,422 @@ class TypoAttackPlanner:
         diffusion_images = [diffusion_image.resize((image.width, image.height)) for diffusion_image in diffusion_images]
 
         return diffusion_images, seg_image, plan_detail_origin, plan_detail
+    
+
+def attack_all_three_variants(self, image_path, question, correct_answer, options, model="gpt-4o-2024-08-06", FIXED_POSITION_CACHE=None):
+        """
+        Generate all three text variants using the SAME text_position_number.
+        Returns supporting, misleading, and irrelevant plans with identical positions.
+        """
+        # Load the image
+        image = Image.open(image_path).convert("RGB")
+
+        # Load som image and mask
+        image_name = image_path.split("/")[-1]
+
+        seg_image = Image.open(os.path.join(self.som_image_folder, image_name)).convert("RGB")
+        mask = np.load(os.path.join(self.som_image_folder, image_name.replace(".jpg", ".npy")), allow_pickle=True)
+
+        # get typo attack plan from chatgpt
+        base64_image = pil_to_base64(image)
+        base64_image_som = pil_to_base64(seg_image)
+        # gpt-4o-2024-08-06
+
+        # ============================================
+        # STEP 1: Generate Misleading Text FIRST (this determines the position)
+        # ============================================
+
+        completion_request = CompletionRequest(
+            model=model, 
+            temperature=self.temperature, 
+            # max_tokens=self.max_tokens, 
+            top_p=self.top_p,
+            response_format=PlanMisleading
+        )
+        completion_request.set_system_instruction(self.instruction_misleading)
+
+        # Format options for the prompt
+        options_text = f"Options: A: {options['A']}, B: {options['B']}, C: {options['C']}, D: {options['D']}"
+        user_text = f"Image 0 is the original image, Image 1 is the corresponding segmentation map. Observe the image and the corresponding segmentation map carefully. Question to attack: {question}. {options_text}. Correct answer: {correct_answer}. Please provide a detailed, step-by-step plan for achieving this goal."
+
+        completion_request.add_user_message(text=user_text, base64_image=[base64_image, base64_image_som], image_first=True)
+        completion = completion_request.get_completion_payload()
+        misleading_plan_origin = completion.choices[0].message.parsed
+
+        # print("Misleading Plan (Original):")
+        # print(f"  - misleading_text: {misleading_plan_origin.misleading_text}")
+        # print(f"  - incorrect_answer: {misleading_plan_origin.incorrect_answer}")
+        # print(f"  - text_position_number: {misleading_plan_origin.text_position_number}")
+
+        # Adjust misleading plan
+        max_retries = 3
+        misleading_plan_adjusted = None
+
+        for attempt in range(1, max_retries + 1):
+            print(f"Attempt {attempt}/{max_retries} for plan adjustment...")
+
+            completion_request.add_assistant_message(text=f"{misleading_plan_origin}")
+            completion_request.set_response_format(PlanMisleadingAdjust)
+            completion_request.add_user_message(text=self.instruction_adjust_plan)
+
+            try:
+                completion = completion_request.get_completion_payload()
+
+                # Safely extract parsed result
+                if (completion and getattr(completion, "choices", None)
+                        and len(completion.choices) > 0):
+                    message = completion.choices[0].message
+                    parsed = getattr(message, "parsed", None)
+                    if parsed and getattr(parsed, "adjust_plan", None):
+                        misleading_plan_adjusted = parsed.adjust_plan
+                        print("✅ Adjusted plan received successfully.")
+                        break  # success → exit retry loop
+                    else:
+                        print("⚠️  No parsed.adjust_plan found in response.")
+                else:
+                    print("⚠️  Invalid or empty completion object.")
+
+            except Exception as e:
+                print(f"❌ Exception on attempt {attempt}: {e}")
+
+            # Optional small delay before retry
+            import time
+            time.sleep(1)
+
+        # Fallback after retries
+        if misleading_plan_adjusted is None:
+            print("❗ Failed to get adjusted plan after 3 tries, using original plan.")
+            misleading_plan_adjusted = misleading_plan_origin
+
+        # THE POSITION IS NOW FIXED - all other variants must use this position
+        if FIXED_POSITION_CACHE is not None:
+            FIXED_POSITION = FIXED_POSITION_CACHE
+            print(f"\n*** USING CACHED FIXED POSITION FOR ALL VARIANTS: {FIXED_POSITION} ***\n")
+        else:
+            FIXED_POSITION = misleading_plan_adjusted.text_position_number
+
+        # print(f"\n*** FIXED POSITION FOR ALL VARIANTS: {FIXED_POSITION} ***\n")
+
+        # ============================================
+        # STEP 2: Generate Supporting Text (NO adjustment - just use fixed position)
+        # ============================================
+
+        completion_request = CompletionRequest(
+            model=model, 
+            temperature=self.temperature, 
+            # max_tokens=self.max_tokens, 
+            top_p=self.top_p,
+            response_format=PlanSupporting
+        )
+        completion_request.set_system_instruction(self.instruction_supporting)
+        user_text = f"Image 0 is the original image, Image 1 is the corresponding segmentation map. Observe the image and the corresponding segmentation map carefully. Question: {question}. Correct answer: {correct_answer}. IMPORTANT: You must use text_position_number = {FIXED_POSITION}. Please provide your response."
+
+        completion_request.add_user_message(text=user_text, base64_image=[base64_image, base64_image_som], image_first=True)
+        completion = completion_request.get_completion_payload()
+        supporting_plan = completion.choices[0].message.parsed
+
+        # Force the position to match (no adjustment needed)
+        supporting_plan.text_position_number = FIXED_POSITION
+
+        # ============================================
+        # STEP 3: Generate Irrelevant Text (NO adjustment - just use fixed position)
+        # # ============================================
+
+        completion_request = CompletionRequest(
+            model=model, 
+            temperature=self.temperature, 
+            top_p=self.top_p,
+            response_format=PlanIrrelevant
+        )
+        random_int_between_0_and_49 = random.randint(0, 49)
+        completion_request.set_system_instruction(self.instruction_irrelevant)
+        user_text = f"Image 0 is the original image, Image 1 is the corresponding segmentation map. Observe the image and the corresponding segmentation map carefully. Question: {question}. IMPORTANT: You must use text_position_number = {FIXED_POSITION}. the provided domain is {random_domains[random_int_between_0_and_49]}. Please provide your response."
+
+        completion_request.add_user_message(text=user_text, base64_image=[base64_image, base64_image_som], image_first=True)
+        completion = completion_request.get_completion_payload()
+        irrelevant_plan = completion.choices[0].message.parsed
+
+        # Force the position to match (no adjustment needed)
+        irrelevant_plan.text_position_number = FIXED_POSITION
+
+        # ============================================
+        # VERIFICATION: All three should have the same position
+        # ============================================
+        assert misleading_plan_adjusted.text_position_number == FIXED_POSITION
+        assert supporting_plan.text_position_number == FIXED_POSITION
+        assert irrelevant_plan.text_position_number == FIXED_POSITION
+
+        # ============================================
+        # STEP 4: Calculate Text Region (SHARED - based on fixed position)
+        # ============================================
+
+        if int(FIXED_POSITION) <= len(mask):
+            target_mask = mask[int(FIXED_POSITION) - 1]['segmentation']
+            # print(f"Using segmentation region {FIXED_POSITION}")
+        else:
+            # print(f"text_position_number {FIXED_POSITION} is out of range, using the largest mask")
+            target_mask = mask[0]['segmentation']
+
+        label = True
+        x, y, w, h = largest_inscribed_rectangle(target_mask, label)
+        # print(f"Largest inscribed rectangle [x, y, w, h]: {[x, y, w, h]}")
+
+        # Change coordinate system
+        mask_width, mask_height = target_mask.T.shape
+        left, top, right, bottom = (
+            x / mask_width * image.width, 
+            y / mask_height * image.height, 
+            (x + w) / mask_width * image.width, 
+            (y + h) / mask_height * image.height
+        )
+
+        # Store the base coordinates
+        base_left, base_top, base_right, base_bottom = left, top, right, bottom
+
+        # ============================================
+        # STEP 5: Generate Diffusion Images for Each Variant
+        # ============================================
+
+        results = {}
+
+        # RESIZE BY SCALE - adjust rectangle to fit the text aspect ratio
+        left, top, right, bottom = find_text_region(
+            misleading_plan_adjusted.misleading_text,  # The text to fit
+            base_left, base_top, base_right, base_bottom,  # Base coordinates
+            font_path="./fonts/arialbd.ttf",
+            font_size=20, 
+            aspect_ratio_threshold=0.1
+        )
+        # print(f"Resized rectangle for misleading text '{misleading_plan_adjusted.misleading_text}': {[(int(left), int(top)), (int(right), int(bottom))]}")
+
+        # Create two-point positions for diffusion
+        # point_positions = [(int(left), int(top)), (int(right), int(bottom))]
+        point_positions = [
+            (int(left),  int(top)),     # top-left
+            (int(right), int(top)),     # top-right
+            (int(right), int(bottom)),  # bottom-right
+            (int(left),  int(bottom)),  # bottom-left
+        ]
+
+        # Run diffusion
+        diffusion_result = self.diffuser.generate(
+            point_positions, 
+            image_path, 
+            misleading_plan_adjusted.misleading_text,
+            misleading_plan_adjusted.short_caption_with_misleading_text, 
+            # radio="Two Points",
+            radio="Four Points",
+            positive_prompt = (
+                "clear legible text, exact spelling, sharp letters, "
+                "professional typography, sans-serif font, "
+                "high contrast, perfectly straight baseline, "
+                "natural lighting, realistic text integration"
+            ),
+            scale_factor=3, 
+            regional_diffusion=True
+        )
+
+        # Resize diffusion images to match original image size
+        misleading_diffusion_images = diffusion_result[0]
+        misleading_diffusion_images = [img.resize((image.width, image.height)) for img in misleading_diffusion_images]
+
+        results['misleading'] = {
+            'plan_origin': misleading_plan_origin,
+            'plan_adjusted': misleading_plan_adjusted,
+            'diffusion_images': misleading_diffusion_images,
+            'coordinates': (left, top, right, bottom)
+        }
+
+        # --- SUPPORTING TEXT DIFFUSION ---
+        # print("\n[2/4] Generating supporting text diffusion...")
+
+        # RESIZE BY SCALE - adjust rectangle to fit the supporting text aspect ratio
+        left, top, right, bottom = find_text_region(
+            supporting_plan.supporting_text,  # Different text content
+            base_left, base_top, base_right, base_bottom,  # SAME base coordinates
+            font_path="./fonts/arialbd.ttf",
+            font_size=20, 
+            aspect_ratio_threshold=0.1
+        )
+        # print(f"Resized rectangle for supporting text '{supporting_plan.supporting_text}': {[(int(left), int(top)), (int(right), int(bottom))]}")
+
+        # point_positions = [(int(left), int(top)), (int(right), int(bottom))]
+        point_positions = [
+            (int(left), int(top)),           # Top-left
+            (int(right), int(top)),          # Top-right
+            (int(right), int(bottom)),       # Bottom-right
+            (int(left), int(bottom))         # Bottom-left
+        ]
+        diffusion_result = self.diffuser.generate(
+            point_positions, 
+            image_path, 
+            supporting_plan.supporting_text,
+            supporting_plan.short_caption_with_supporting_text, 
+            # radio="Two Points",
+            radio="Four Points",
+            positive_prompt = (
+                "clear legible text, exact spelling, sharp letters, "
+                "professional typography, sans-serif font, "
+                "high contrast, perfectly straight baseline, "
+                "natural lighting, realistic text integration"
+            ),
+            scale_factor=3, 
+            regional_diffusion=True
+        )
+
+        supporting_diffusion_images = diffusion_result[0]
+        supporting_diffusion_images = [img.resize((image.width, image.height)) for img in supporting_diffusion_images]
+
+        results['supporting'] = {
+            'plan': supporting_plan,
+            'diffusion_images': supporting_diffusion_images,
+            'coordinates': (left, top, right, bottom)
+        }
+
+        # --- IRRELEVANT TEXT DIFFUSION ---
+        # print("\n[3/4] Generating irrelevant text diffusion...")
+
+        # RESIZE BY SCALE - adjust rectangle to fit the irrelevant text aspect ratio
+        left, top, right, bottom = find_text_region(
+            irrelevant_plan.irrelevant_text,  # Different text content
+            # "Gourmet cuisine",
+            base_left, base_top, base_right, base_bottom,  # SAME base coordinates
+            font_path="./fonts/arialbd.ttf",
+            font_size=20, 
+            aspect_ratio_threshold=0.1
+        )
+        # print(f"Resized rectangle for irrelevant text '{irrelevant_plan.irrelevant_text}': {[(int(left), int(top)), (int(right), int(bottom))]}")
+
+        # point_positions = [(int(left), int(top)), (int(right), int(bottom))]
+        point_positions = [
+            (int(left), int(top)),           # Top-left
+            (int(right), int(top)),          # Top-right
+            (int(right), int(bottom)),       # Bottom-right
+            (int(left), int(bottom))         # Bottom-left
+        ]
+
+        diffusion_result = self.diffuser.generate(
+            point_positions,
+            image_path,
+            irrelevant_plan.irrelevant_text,
+            irrelevant_plan.short_caption_with_irrelevant_text,
+            # radio="Two Points",
+            radio="Four Points",
+            positive_prompt = (
+                "clear legible text, exact spelling, sharp letters, "
+                "professional typography, sans-serif font, "
+                "high contrast, perfectly straight baseline, "
+                "natural lighting, realistic text integration"
+            ),
+            scale_factor=3,              # 2–3 is more stable than 4
+            regional_diffusion=True,
+        )
+
+        irrelevant_diffusion_images = diffusion_result[0]
+        irrelevant_diffusion_images = [img.resize((image.width, image.height)) for img in irrelevant_diffusion_images]
+
+        results['irrelevant'] = {
+            'plan': irrelevant_plan,
+            'diffusion_images': irrelevant_diffusion_images,
+            'coordinates': (left, top, right, bottom)
+        }
+
+        # print("\n[4/4] Generating the correct answer text diffusion...")
+
+        # RESIZE BY SCALE - adjust rectangle to fit the text aspect ratio
+        left, top, right, bottom = find_text_region(
+            correct_answer,  # The text to fit
+            base_left, base_top, base_right, base_bottom,  # Base coordinates
+            font_path="./fonts/arialbd.ttf",
+            font_size=20, 
+            aspect_ratio_threshold=0.1
+        )
+        # print(f"Resized rectangle for misleading text '{misleading_plan_adjusted.misleading_text}': {[(int(left), int(top)), (int(right), int(bottom))]}")
+
+        # Create two-point positions for diffusion
+        # point_positions = [(int(left), int(top)), (int(right), int(bottom))]
+        point_positions = [
+            (int(left),  int(top)),     # top-left
+            (int(right), int(top)),     # top-right
+            (int(right), int(bottom)),  # bottom-right
+            (int(left),  int(bottom)),  # bottom-left
+        ]
+
+        # Run diffusion
+        diffusion_result = self.diffuser.generate(
+            point_positions, 
+            image_path, 
+            correct_answer,
+            f"Image showing the answer: {correct_answer}", 
+            # radio="Two Points",
+            radio="Four Points",
+            positive_prompt = (
+                "clear legible text, exact spelling, sharp letters, "
+                "professional typography, sans-serif font, "
+                "high contrast, perfectly straight baseline, "
+                "natural lighting, realistic text integration"
+            ),
+            scale_factor=3, 
+            regional_diffusion=True
+        )
+
+        # Resize diffusion images to match original image size
+        correct_diffusion_images = diffusion_result[0]
+        correct_diffusion_images = [img.resize((image.width, image.height)) for img in correct_diffusion_images]
+
+        results['correct'] = {
+            'diffusion_images': correct_diffusion_images,
+            'coordinates': (left, top, right, bottom)
+        }
+
+        results['fixed_position'] = FIXED_POSITION
+        results['seg_image'] = seg_image
+        results['mask'] = mask
+
+        # ============================================
+        # STEP 6: Create/Update Cache File
+        # ============================================
+        
+        # Define cache directory and file path
+        cache_dir = "./cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # Create a unique cache filename based on image name
+        image_name_base = os.path.splitext(image_name)[0]
+        cache_file = os.path.join(cache_dir, f"{image_name_base}_cache.json")
+        
+        # Prepare cache data
+        cache_data = {
+            "image_name": image_name,
+            "fixed_position": FIXED_POSITION,
+            "variants": {
+                "misleading": {
+                    "text": misleading_plan_adjusted.misleading_text,
+                    "incorrect_answer": misleading_plan_adjusted.incorrect_answer,
+                    "caption": misleading_plan_adjusted.short_caption_with_misleading_text
+                },
+                "supporting": {
+                    "text": supporting_plan.supporting_text,
+                    "caption": supporting_plan.short_caption_with_supporting_text
+                },
+                "irrelevant": {
+                    "text": irrelevant_plan.irrelevant_text,
+                    "caption": irrelevant_plan.short_caption_with_irrelevant_text
+                },
+                "correct": {
+                    "text": correct_answer
+                }
+            },
+            "question": question,
+            "correct_answer": correct_answer,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Write cache file
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"\n✅ Cache file created: {cache_file}")
+
+        return results
 
