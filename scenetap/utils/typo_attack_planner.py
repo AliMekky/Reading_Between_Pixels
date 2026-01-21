@@ -60,7 +60,7 @@ def load_cache(image_path):
     return None
 
 
-def find_text_region(text, left, top, right, bottom, font_path='./fonts/arialbd.ttf', font_size=20, aspect_ratio_threshold=0.1):
+def find_text_region(text, left, top, right, bottom, font_path='./fonts/arial.ttf', font_size=20, aspect_ratio_threshold=0.1):
     # Load the font (you may need to provide the correct font path)
     font = ImageFont.truetype(font_path, font_size)
 
@@ -215,7 +215,7 @@ class TypoAttackPlanner:
 
         # resize by scale
         left, top, right, bottom = find_text_region(plan_detail.adversarial_text, left, top, right, bottom,
-                                                    font_path="./fonts/arialbd.ttf",
+                                                    font_path="./fonts/arial.ttf",
                                                     font_size=20, aspect_ratio_threshold=0.1)
         print("Resized rectangle [(left, top), (right, bottom)]:", [(int(left), int(top)), (int(right), int(bottom))])
 
@@ -422,7 +422,7 @@ class TypoAttackPlanner:
             ml_left, ml_top, ml_right, ml_bottom = find_text_region(
                 misleading_plan_adjusted.misleading_text,  # The text to fit
                 base_left, base_top, base_right, base_bottom,  # Base coordinates
-                font_path="./fonts/arialbd.ttf",
+                font_path="./fonts/arial.ttf",
                 font_size=20, 
                 aspect_ratio_threshold=0.1
             )
@@ -473,7 +473,7 @@ class TypoAttackPlanner:
             # left, top, right, bottom = find_text_region(
             #     supporting_plan.supporting_text,  # Different text content
             #     base_left, base_top, base_right, base_bottom,  # SAME base coordinates
-            #     font_path="./fonts/arialbd.ttf",
+            #     font_path="./fonts/arial.ttf",
             #     font_size=20, 
             #     aspect_ratio_threshold=0.1
             # )
@@ -519,7 +519,7 @@ class TypoAttackPlanner:
                 irrelevant_plan.irrelevant_text,  # Different text content
                 # "Gourmet cuisine",
                 base_left, base_top, base_right, base_bottom,  # SAME base coordinates
-                font_path="./fonts/arialbd.ttf",
+                font_path="./fonts/arial.ttf",
                 font_size=20, 
                 aspect_ratio_threshold=0.1
             )
@@ -566,7 +566,7 @@ class TypoAttackPlanner:
             cr_left, cr_top, cr_right, cr_bottom = find_text_region(
                 correct_answer,  # The text to fit
                 base_left, base_top, base_right, base_bottom,  # Base coordinates
-                font_path="./fonts/arialbd.ttf",
+                font_path="./fonts/arial.ttf",
                 font_size=20, 
                 aspect_ratio_threshold=0.1
             )
