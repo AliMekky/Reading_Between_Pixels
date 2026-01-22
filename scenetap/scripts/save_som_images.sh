@@ -1,57 +1,29 @@
-python save_som_images.py \
+#!/bin/bash
+#SBATCH --account=cscc-users
+#SBATCH -p cscc-gpu-p
+#SBATCH --qos=cscc-gpu-qos
+#SBATCH --gres=gpu:1
+#SBATCH --mem=60G
+#SBATCH --cpus-per-task=16
+#SBATCH -t 24:00:00
+#SBATCH --job-name=images_segmentation
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+
+source /apps/local/anaconda3/conda_init.sh
+conda activate textdiffuser2
+
+echo "Job started on $(date)"
+echo "Node: $(hostname)"
+echo "CUDA devices:"
+nvidia-smi
+
+cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/scenetap/
+python -u save_som_images.py \
   --seed 42 \
   --dataset typo_base_color \
   --slider 3 \
   --filter 12 \
-  --image-folder <image_path> \
-  --question-file <question_file_path> \
-  --log_dir som_images
-
-python save_som_images.py \
-  --seed 42 \
-  --dataset typo_base_complex \
-  --slider 3 \
-  --filter 12 \
-  --image-folder <image_path> \
-  --question-file <question_file_path> \
-  --log_dir som_images
-
-python save_som_images.py \
-  --seed 42 \
-  --dataset typo_base_species \
-  --slider 3 \
-  --filter 12 \
-  --image-folder <image_path> \
-  --question-file <question_file_path> \
-  --log_dir som_images
-
-python save_som_images.py \
-  --seed 42 \
-  --dataset typo_base_counting \
-  --slider 3 \
-  --filter 12 \
-  --image-folder <image_path> \
-  --question-file <question_file_path> \
-  --log_dir som_images
-
-
-# lingoQA
-python save_som_images.py \
-  --seed 42 \
-  --dataset LingoQA \
-  --slider 3 \
-  --filter 15 \
-  --question-file <question_file_path> \
-  --image-folder <image_path> \
-  --log_dir som_images
-
-# vqav2_val2014
-python save_som_images.py \
-  --seed 42 \
-  --dataset vqav2_val2014 \
-  --slider 3 \
-  --filter 12 \
-  --question-file <question_file_path> \
-  --image-folder <image_path> \
-  --log_dir som_images
-
+  --image-folder ./data/images \
+  --question-file ./data/questions.json \
+  --log_dir ./som_images
