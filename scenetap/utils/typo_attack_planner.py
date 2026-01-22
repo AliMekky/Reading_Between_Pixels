@@ -309,6 +309,9 @@ class TypoAttackPlanner:
 
             # irrelevant answer
             IRRELEVANT_TEXT = random.choice(self.random_words)
+            while len(IRRELEVANT_TEXT) > 10:
+                IRRELEVANT_TEXT = random.choice(self.random_words)
+
 
 
             # ============================================
