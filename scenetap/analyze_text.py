@@ -142,26 +142,26 @@ if __name__ == "__main__":
 
 
             image.save(os.path.join(image_save_dir, f"{image_name_save}"))
-            seg_image.save(os.path.join(image_save_dir, f"{image_name_save.replace('.jpg', '_seg.jpg')}"))
+            seg_image.save(os.path.join(image_save_dir, f"{image_name_save.replace('png', '_segpng')}"))
             # diffusion save path
             image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion",
-                                                    f"{image_name_save.replace('.jpg', '')}")
+                                                    f"{image_name_save.replace('png', '')}")
             os.makedirs(image_save_dir_diffusion, exist_ok=True)
             for k, img in enumerate(images):
-                img.save(os.path.join(image_save_dir_diffusion, f"{k}.jpg"))
+                img.save(os.path.join(image_save_dir_diffusion, f"{k}png"))
         
         elif args.attack == "TextAnalysis":
             results = typo_attack_planner.generate_variants(image_path, question, correct_answer, options, model="gpt-4o-2024-08-06")
             for variant in ["misleading", "irrelevant", "correct"]:
                 images = results[variant]['diffusion_images']
                 image = images[0]
-                image.save(os.path.join(image_save_dir, f"{image_name_save.replace('.jpg', f'_{variant}.jpg')}"))
+                image.save(os.path.join(image_save_dir, f"{image_name_save.replace('.png', f'_{variant}.png')}"))
                 # diffusion save path
                 image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion",
-                                                        f"{image_name_save.replace('.jpg', '')}_{variant}")
+                                                        f"{image_name_save.replace('.png', '')}_{variant}")
                 os.makedirs(image_save_dir_diffusion, exist_ok=True)
                 for k, img in enumerate(images):
-                    img.save(os.path.join(image_save_dir_diffusion, f"{k}.jpg"))
+                    img.save(os.path.join(image_save_dir_diffusion, f"{k}.png"))
         else:
             image = Image.open(image_path).convert("RGB")
             images = [image]

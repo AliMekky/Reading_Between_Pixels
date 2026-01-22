@@ -51,47 +51,109 @@ def load_cache(image_path):
     return None
 
 
-def find_text_region(text, left, top, right, bottom, font_path='./fonts/arial.ttf', font_size=20, aspect_ratio_threshold=0.1):
-    # Load the font (you may need to provide the correct font path)
+# def find_text_region(text, left, top, right, bottom, font_path='./fonts/arial.ttf', font_size=20, aspect_ratio_threshold=0.1):
+#     # Load the font (you may need to provide the correct font path)
+#     font = ImageFont.truetype(font_path, font_size)
+
+#     # Calculate the width and height of the original region
+#     w = right - left
+#     h = bottom - top
+
+#     # Get the text size (width and height)
+#     text_width, text_height = font.getsize(text)
+
+#     # Calculate text aspect ratio
+#     text_aspect_ratio = text_height / text_width
+
+#     # Calculate the region aspect ratio
+#     region_aspect_ratio = h / w
+
+#     # Compare the two aspect ratios
+#     aspect_ratio_difference = abs(region_aspect_ratio - text_aspect_ratio)
+
+#     if aspect_ratio_difference > aspect_ratio_threshold:
+#         # If the aspect ratios differ too much, adjust the region
+#         if text_aspect_ratio > region_aspect_ratio:
+#             # Text is taller relative to the region aspect ratio, adjust height
+#             scaled_height = h
+#             scaled_width = scaled_height / text_aspect_ratio
+#         else:
+#             # Text is wider relative to the region aspect ratio, adjust width
+#             scaled_width = w
+#             scaled_height = scaled_width * text_aspect_ratio
+
+#         # Center the found region within the original [left, top, right, bottom]
+#         find_left = left + (w - scaled_width) / 2
+#         find_top = top + (h - scaled_height) / 2
+#         find_right = find_left + scaled_width
+#         find_bottom = find_top + scaled_height
+
+#         return int(find_left), int(find_top), int(find_right), int(find_bottom)
+
+#     # If aspect ratio is close enough, return the original region
+#     return int(left), int(top), int(right), int(bottom)
+def find_text_region(text, left, top, right, bottom,
+                     font_path='./fonts/arial.ttf', font_size=20,
+                     aspect_ratio_threshold=0.1, debug=False):
     font = ImageFont.truetype(font_path, font_size)
 
-    # Calculate the width and height of the original region
     w = right - left
     h = bottom - top
 
-    # Get the text size (width and height)
-    text_width, text_height = font.getsize(text)
+    # Use getbbox (more reliable than getsize in newer Pillow)
+    try:
+        x0, y0, x1, y1 = font.getbbox(text)
+        text_width, text_height = (x1 - x0), (y1 - y0)
+    except Exception:
+        text_width, text_height = font.getsize(text)
 
-    # Calculate text aspect ratio
-    text_aspect_ratio = text_height / text_width
+    if debug:
+        print("\n[find_text_region]")
+        print("  IN box:", (left, top, right, bottom), "w,h:", (w, h))
+        print("  text:", repr(text), "text_w,h:", (text_width, text_height))
 
-    # Calculate the region aspect ratio
-    region_aspect_ratio = h / w
+    # Guard against zero/negative sizes
+    if w <= 0 or h <= 0 or text_width <= 0 or text_height <= 0:
+        if debug:
+            print("  ⚠️ invalid dims -> returning input")
+        return int(left), int(top), int(right), int(bottom)
 
-    # Compare the two aspect ratios
-    aspect_ratio_difference = abs(region_aspect_ratio - text_aspect_ratio)
+    text_ar = text_height / text_width     # (h/w)
+    region_ar = h / w
+    diff = abs(region_ar - text_ar)
 
-    if aspect_ratio_difference > aspect_ratio_threshold:
-        # If the aspect ratios differ too much, adjust the region
-        if text_aspect_ratio > region_aspect_ratio:
-            # Text is taller relative to the region aspect ratio, adjust height
+    if debug:
+        print("  region_ar:", region_ar, "text_ar:", text_ar, "diff:", diff)
+
+    if diff > aspect_ratio_threshold:
+        if text_ar > region_ar:
             scaled_height = h
-            scaled_width = scaled_height / text_aspect_ratio
+            scaled_width = scaled_height / text_ar
         else:
-            # Text is wider relative to the region aspect ratio, adjust width
             scaled_width = w
-            scaled_height = scaled_width * text_aspect_ratio
+            scaled_height = scaled_width * text_ar
 
-        # Center the found region within the original [left, top, right, bottom]
         find_left = left + (w - scaled_width) / 2
         find_top = top + (h - scaled_height) / 2
         find_right = find_left + scaled_width
         find_bottom = find_top + scaled_height
 
+        if debug:
+            print("  OUT box:", (find_left, find_top, find_right, find_bottom))
+            # Invariants: OUT should be within IN (up to float rounding)
+            print("  within-in?",
+                  find_left >= left - 1e-6,
+                  find_top >= top - 1e-6,
+                  find_right <= right + 1e-6,
+                  find_bottom <= bottom + 1e-6)
+
         return int(find_left), int(find_top), int(find_right), int(find_bottom)
 
-    # If aspect ratio is close enough, return the original region
+    if debug:
+        print("  OUT box (unchanged):", (left, top, right, bottom))
+
     return int(left), int(top), int(right), int(bottom)
+
 
 
 
@@ -116,7 +178,7 @@ class TypoAttackPlanner:
                   'r') as file:
             self.instruction = file.read()
 
-        with open("irrelevant_words_5000.json", 'r', encoding='utf-8') as f:
+        with open("./utils/irrelevant_words_5000.json", 'r', encoding='utf-8') as f:
             self.random_words = json.load(f)
         
 
@@ -132,7 +194,7 @@ class TypoAttackPlanner:
             image_name = image_path.split("/")[-1]
 
             seg_image = Image.open(os.path.join(self.som_image_folder, image_name)).convert("RGB")
-            mask = np.load(os.path.join(self.som_image_folder, image_name.replace(".jpg", ".npy")), allow_pickle=True)
+            mask = np.load(os.path.join(self.som_image_folder, image_name.replace(".png", ".npy")), allow_pickle=True)
 
             # get typo attack plan from chatgpt
             base64_image = pil_to_base64(image)
@@ -190,9 +252,10 @@ class TypoAttackPlanner:
                 FIXED_POSITION = FIXED_POSITION_CACHE
                 print(f"\n*** USING CACHED FIXED POSITION FOR ALL VARIANTS: {FIXED_POSITION} ***\n")
             else:
-                FIXED_POSITION = plan.text_position_number
-                CAPTION = plan.short_caption
-
+                FIXED_POSITION = parsed.text_position_number
+                CAPTION = parsed.short_caption
+            print("✅ Final Fixed Position Number:", FIXED_POSITION)
+            print("✅ Caption for Text Diffusion:", CAPTION)
 
 
             # ============================================
@@ -200,6 +263,8 @@ class TypoAttackPlanner:
             # ============================================
 
             if int(FIXED_POSITION) <= len(mask):
+                print("MAAASK")
+                print(len(mask))
                 target_mask = mask[int(FIXED_POSITION) - 1]['segmentation']
             else:
                 target_mask = mask[0]['segmentation']
@@ -216,12 +281,20 @@ class TypoAttackPlanner:
                 (y + h) / mask_height * image.height
             )
 
+            print("RECT x,y,w,h:", x, y, w, h)
+            print("MASK H,W:", mask_height, mask_width)
+            print("CHECK x+w vs W:", x + w, "vs", mask_width)
+            print("CHECK y+h vs H:", y + h, "vs", mask_height)
+
 
             # Store the base coordinates
             base_left, base_top, base_right, base_bottom = left, top, right, bottom
             base_bbox_xyxy = [int(base_left), int(base_top), int(base_right), int(base_bottom)]
             
-            
+            print("IMAGE:", image.width, image.height)
+            print("MASK SHAPE:", target_mask.shape)  # should be (H, W)
+            print("base bbox floats:", base_left, base_top, base_right, base_bottom)
+            print("base bbox ints:", base_bbox_xyxy)
             # ============================================
             # STEP 3: Get the text to be overlaid for each variant
             # ============================================
@@ -257,8 +330,27 @@ class TypoAttackPlanner:
             )
             misleading_bbox_xyxy = [int(ml_left), int(ml_top), int(ml_right), int(ml_bottom)] ## to store in cache
 
+            dbg = image.copy()
+            d = ImageDraw.Draw(dbg)
+            d.rectangle(
+                [int(base_left), int(base_top), int(base_right), int(base_bottom)],
+                outline="red", width=4
+            )
+
+            # draw final text bbox
+            d.rectangle(
+                [int(ml_left), int(ml_top), int(ml_right), int(ml_bottom)],
+                outline="green", width=4
+            )
+
+            dbg.save("./debug_global_bbox.png")
+            print("Saved debug_global_bbox.png")
+
             # Create two-point positions for diffusion
             # point_positions = [(int(left), int(top)), (int(right), int(bottom))]
+            print("IMAGE SIZE:", image.width, image.height)
+            print("RAW BOX:", ml_left, ml_top, ml_right, ml_bottom)
+
             point_positions = [
                 (int(ml_left),  int(ml_top)),     # top-left
                 (int(ml_right), int(ml_top)),     # top-right
@@ -276,12 +368,9 @@ class TypoAttackPlanner:
                 # radio="Two Points",
                 radio="Four Points",
                 positive_prompt = (
-                    "clear legible text, exact spelling, sharp letters, "
-                    "professional, arial font, "
-                    "high contrast, perfectly straight baseline, "
-                    "natural lighting, realistic text integration"
+                    "clear, sharp printed signage text, high contrast, straight baseline, legible letters, natural, realistic"
                 ),
-                scale_factor=3, 
+                scale_factor=2.5, 
                 regional_diffusion=True
             )
 
@@ -322,12 +411,9 @@ class TypoAttackPlanner:
                 # radio="Two Points",
                 radio="Four Points",
                 positive_prompt = (
-                    "clear legible text, exact spelling, sharp letters, "
-                    "professional, arial font, "
-                    "high contrast, perfectly straight baseline, "
-                    "natural lighting, realistic text integration"
+                    "clear, sharp printed signage text, high contrast, straight baseline, legible letters, natural, realistic"
                 ),
-                scale_factor=3,              # 2–3 is more stable than 4
+                scale_factor=2.5,             # 2–3 is more stable than 4
                 regional_diffusion=True,
             )
 
@@ -370,12 +456,9 @@ class TypoAttackPlanner:
                 # radio="Two Points",
                 radio="Four Points",
                 positive_prompt = (
-                    "clear legible text, exact spelling, sharp letters, "
-                    "professional, arial font, "
-                    "high contrast, perfectly straight baseline, "
-                    "natural lighting, realistic text integration"
+                    "clear, sharp printed signage text, high contrast, straight baseline, legible letters, natural, realistic"
                 ),
-                scale_factor=3, 
+                scale_factor=2.5, 
                 regional_diffusion=True
             )
 

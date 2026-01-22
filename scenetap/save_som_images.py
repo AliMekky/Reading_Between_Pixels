@@ -64,9 +64,12 @@ if __name__ == "__main__":
         seg_image = Image.fromarray(seg_image)
         seg_image = seg_image.resize(image.size)
         seg_image.save(os.path.join(args.log_dir, image_name))
+        print(f"image saved into {os.path.join(args.log_dir, image_name)}")
+        
         # save the mask to .npy file, mask it now a list of numpy arrays
         mask_save_path = os.path.join(args.log_dir, image_name.split('.')[0] + '.npy')
         np.save(mask_save_path, mask)
+        print(f"mask saved into {os.path.join(args.log_dir, image_name.split('.')[0] + '.npy')}")
 
 
 
