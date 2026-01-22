@@ -7,6 +7,7 @@ import torch
 from PIL import Image
 from pytorch_lightning import seed_everything
 from utils.som import SoM
+from tqdm import tqdm
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -48,7 +49,7 @@ if __name__ == "__main__":
 
     som = SoM(semsam_cfg, seem_cfg, semsam_ckpt, sam_ckpt, seem_ckpt)
     image_set = set()
-    for entry in questions:
+    for entry in tqdm(questions):
         image_name = entry["image"]
         if image_name in image_set:
             continue
@@ -64,12 +65,12 @@ if __name__ == "__main__":
         seg_image = Image.fromarray(seg_image)
         seg_image = seg_image.resize(image.size)
         seg_image.save(os.path.join(args.log_dir, image_name))
-        print(f"image saved into {os.path.join(args.log_dir, image_name)}")
+        # print(f"image saved into {os.path.join(args.log_dir, image_name)}")
         
         # save the mask to .npy file, mask it now a list of numpy arrays
         mask_save_path = os.path.join(args.log_dir, image_name.split('.')[0] + '.npy')
         np.save(mask_save_path, mask)
-        print(f"mask saved into {os.path.join(args.log_dir, image_name.split('.')[0] + '.npy')}")
+        # print(f"mask saved into {os.path.join(args.log_dir, image_name.split('.')[0] + '.npy')}")
 
 
 

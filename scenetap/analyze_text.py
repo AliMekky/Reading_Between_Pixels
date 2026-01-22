@@ -14,6 +14,7 @@ from utils.lingo_judge import LingoJudge
 from utils.typo_attack_planner import TypoAttackPlanner, pil_to_base64
 from utils.typo_attack_planner import format_instance_json
 from utils.utils import is_correct_answer
+from tqdm import tqdm
 
 
 class TypoDataset(Dataset):
@@ -120,7 +121,7 @@ if __name__ == "__main__":
     ans_file_list = []
     correct = 0
     total = 0
-    for i, data in enumerate(questions):
+    for i, data in tqdm(enumerate(questions), total=len(questions)):
         question_id = data["question_id"]
         image_name = data["image"]
         if ("vqav2" in args.dataset or "LingoQA" in args.dataset) and args.attack != "no_attack":
@@ -131,9 +132,9 @@ if __name__ == "__main__":
             image_name_save = image_name
         image_path = os.path.join(args.image_folder, image_name)
 
-        question = data["text"]
+        question = data["question"]
         correct_answer = data["answer"]
-        options = data['options']
+        options = {"A": data['A'], "B": data['B'], "C": data['C'], "D": data['D']}
 
         if args.attack == "SceneTAP":
             images, seg_image, plan_detail_origin, plan_detail = typo_attack_planner.attack(
