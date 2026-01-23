@@ -178,7 +178,7 @@ class TypoAttackPlanner:
                   'r') as file:
             self.instruction = file.read()
 
-        with open("./utils/irrelevant_words_5000.json", 'r', encoding='utf-8') as f:
+        with open("./utils/irrelevant_words_short.json", 'r', encoding='utf-8') as f:
             self.random_words = json.load(f)
         
 
@@ -289,7 +289,7 @@ class TypoAttackPlanner:
             # ============================================
             # misleading answer
             options_list = [options['A'], options['B'], options['C'], options['D']]
-            incorrect_options = [opt for opt in options_list if opt != correct_answer]
+            incorrect_options = [opt for opt in options_list if opt != options[correct_answer]]
             MISLEADING_TEXT = random.choice(incorrect_options)
 
             # Correct Answer (no change)
@@ -298,9 +298,6 @@ class TypoAttackPlanner:
 
             # irrelevant answer
             IRRELEVANT_TEXT = random.choice(self.random_words)
-            while len(IRRELEVANT_TEXT) > 10:
-                IRRELEVANT_TEXT = random.choice(self.random_words)
-
 
 
             # ============================================
@@ -422,7 +419,7 @@ class TypoAttackPlanner:
             # --- CORRECT TEXT DIFFUSION ---
             # RESIZE BY SCALE - adjust rectangle to fit the text aspect ratio
             cr_left, cr_top, cr_right, cr_bottom = find_text_region(
-                correct_answer,  # The text to fit
+                CORRECT_TEXT,  # The text to fit
                 base_left, base_top, base_right, base_bottom,  # Base coordinates
                 font_path="./fonts/arial.ttf",
                 font_size=20, 
@@ -499,7 +496,7 @@ class TypoAttackPlanner:
                     }
                 },
                 "question": question,
-                "correct_answer": correct_answer,
+                "correct_answer": CORRECT_TEXT,
                 "timestamp": datetime.now().isoformat()
             }
 
