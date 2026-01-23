@@ -194,7 +194,7 @@ class TypoAttackPlanner:
             image_name = image_path.split("/")[-1]
 
             seg_image = Image.open(os.path.join(self.som_image_folder, image_name)).convert("RGB")
-            mask = np.load(os.path.join(self.som_image_folder, image_name.replace(".png", ".npy")), allow_pickle=True)
+            mask = np.load(os.path.join(self.som_image_folder, image_name.replace(".jpg", ".npy")), allow_pickle=True)
 
             # get typo attack plan from chatgpt
             base64_image = pil_to_base64(image)
@@ -263,8 +263,6 @@ class TypoAttackPlanner:
             # ============================================
 
             if int(FIXED_POSITION) <= len(mask):
-                print("MAAASK")
-                print(len(mask))
                 target_mask = mask[int(FIXED_POSITION) - 1]['segmentation']
             else:
                 target_mask = mask[0]['segmentation']
@@ -281,31 +279,22 @@ class TypoAttackPlanner:
                 (y + h) / mask_height * image.height
             )
 
-            print("RECT x,y,w,h:", x, y, w, h)
-            print("MASK H,W:", mask_height, mask_width)
-            print("CHECK x+w vs W:", x + w, "vs", mask_width)
-            print("CHECK y+h vs H:", y + h, "vs", mask_height)
-
 
             # Store the base coordinates
             base_left, base_top, base_right, base_bottom = left, top, right, bottom
             base_bbox_xyxy = [int(base_left), int(base_top), int(base_right), int(base_bottom)]
             
-            print("IMAGE:", image.width, image.height)
-            print("MASK SHAPE:", target_mask.shape)  # should be (H, W)
-            print("base bbox floats:", base_left, base_top, base_right, base_bottom)
-            print("base bbox ints:", base_bbox_xyxy)
             # ============================================
             # STEP 3: Get the text to be overlaid for each variant
             # ============================================
+            # misleading answer
+            options_list = [options['A'], options['B'], options['C'], options['D']]
+            incorrect_options = [opt for opt in options_list if opt != correct_answer]
+            MISLEADING_TEXT = random.choice(incorrect_options)
 
             # Correct Answer (no change)
-            CORRECT_TEXT = correct_answer
+            CORRECT_TEXT = options[correct_answer]
             
-            # misleading answer
-            options = [options['A'], options['B'], options['C'], options['D']]
-            incorrect_options = [opt for opt in options if opt != correct_answer]
-            MISLEADING_TEXT = random.choice(incorrect_options)
 
             # irrelevant answer
             IRRELEVANT_TEXT = random.choice(self.random_words)
@@ -320,8 +309,12 @@ class TypoAttackPlanner:
 
 
             results = {}
+            positive_prompt = (
+                "clear, printed signage text, high contrast, wide letter spacing, no merged letters, accurate letters, natural, realistic"
+            )
 
             # ---  MISLEADING TEXT DIFFUSION ---
+
 
             # RESIZE BY SCALE - adjust rectangle to fit the text aspect ratio
             ml_left, ml_top, ml_right, ml_bottom = find_text_region(
@@ -370,10 +363,8 @@ class TypoAttackPlanner:
                 CAPTION, 
                 # radio="Two Points",
                 radio="Four Points",
-                positive_prompt = (
-                    "clear, sharp printed signage text, high contrast, straight baseline, legible letters, natural, realistic"
-                ),
-                scale_factor=2.5, 
+                positive_prompt = positive_prompt,
+                scale_factor=3, 
                 regional_diffusion=True
             )
 
@@ -413,10 +404,8 @@ class TypoAttackPlanner:
                 CAPTION,
                 # radio="Two Points",
                 radio="Four Points",
-                positive_prompt = (
-                    "clear, sharp printed signage text, high contrast, straight baseline, legible letters, natural, realistic"
-                ),
-                scale_factor=2.5,             # 2–3 is more stable than 4
+                positive_prompt = positive_prompt,
+                scale_factor=3,             # 2–3 is more stable than 4
                 regional_diffusion=True,
             )
 
@@ -458,10 +447,8 @@ class TypoAttackPlanner:
                 CAPTION, 
                 # radio="Two Points",
                 radio="Four Points",
-                positive_prompt = (
-                    "clear, sharp printed signage text, high contrast, straight baseline, legible letters, natural, realistic"
-                ),
-                scale_factor=2.5, 
+                positive_prompt = positive_prompt,
+                scale_factor=3, 
                 regional_diffusion=True
             )
 

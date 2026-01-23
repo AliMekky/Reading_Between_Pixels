@@ -66,8 +66,8 @@ def get_scaled_square_region(min_x, min_y, max_x, max_y, img_width, img_height, 
             left -= diff / 2
             right += diff / 2
 
-    print('right - left', int(right) - int(left))
-    print('bottom - top', int(bottom) - int(top))
+    # print('right - left', int(right) - int(left))
+    # print('bottom - top', int(bottom) - int(top))
 
     # Return the new square region's coordinates as the bounding box (left, top, right, bottom)
     return int(left), int(top), int(right), int(bottom)
@@ -91,8 +91,8 @@ class TextDiffuser(object):
         )
 
         #### additional tokens are introduced, including coordinate tokens and character tokens
-        print('***************')
-        print(len(self.tokenizer))
+        # print('***************')
+        # print(len(self.tokenizer))
         for i in range(520):
             self.tokenizer.add_tokens(['l' + str(i)])  # left
             self.tokenizer.add_tokens(['t' + str(i)])  # top
@@ -100,8 +100,8 @@ class TextDiffuser(object):
             self.tokenizer.add_tokens(['b' + str(i)])  # height
         for c in alphabet:
             self.tokenizer.add_tokens([f'[{c}]'])
-        print(len(self.tokenizer))
-        print('***************')
+        # print(len(self.tokenizer))
+        # print('***************')
 
         self.vae = AutoencoderKL.from_pretrained('runwayml/stable-diffusion-v1-5', subfolder="vae").half().cuda()
         self.unet = UNet2DConditionModel.from_pretrained(
@@ -150,9 +150,6 @@ class TextDiffuser(object):
 
     def get_pixels(self, i, orig_i, radio, t, guest_id, text_position):
 
-        print('hi1 ', i)
-        print('hi2 ', orig_i)
-
         width, height = Image.open(i).convert("RGB").size
 
         # register
@@ -176,7 +173,6 @@ class TextDiffuser(object):
         flag = False
         for image in images:
             if image == list(i.getdata()):
-                print('find it')
                 flag = True
                 break
 
@@ -195,7 +191,6 @@ class TextDiffuser(object):
                 self.global_dict[guest_id]['stack'] = []
                 self.global_dict[guest_id]['state'] = 0
 
-        print('hello ', text_position)
 
         if radio == 'Two Points':
 
@@ -203,7 +198,7 @@ class TextDiffuser(object):
                 self.global_dict[guest_id]['stack'].append(
                     (text_position, t)
                 )
-                print(text_position, self.global_dict[guest_id]['stack'])
+                # print(text_position, self.global_dict[guest_id]['stack'])
                 self.global_dict[guest_id]['state'] = 1
             else:
 
@@ -253,7 +248,7 @@ class TextDiffuser(object):
                 self.global_dict[guest_id]['stack'].append(
                     (text_position, t)
                 )
-                print(text_position, self.global_dict[guest_id]['stack'])
+                # print(text_position, self.global_dict[guest_id]['stack'])
                 self.global_dict[guest_id]['state'] = 1
             elif self.global_dict[guest_id]['state'] == 1:
                 (_, t) = self.global_dict[guest_id]['stack'].pop()
@@ -326,7 +321,7 @@ class TextDiffuser(object):
                     draw.line(((x2, y2), (x3, y3)), fill=(255, 0, 0))
                     draw.line(((x3, y3), (x0, y0)), fill=(255, 0, 0))
 
-        print('stack', self.global_dict[guest_id]['stack'])
+        # print('stack', self.global_dict[guest_id]['stack'])
 
         self.global_dict[str(seed)]['image_id'].append(list(image.getdata()))
 
@@ -683,9 +678,9 @@ class TextDiffuser(object):
         scale_factor=2.0,
         answer_instruct=False
     ):
-        print(
-            f'[info] Prompt: {prompt} | Keywords: {keywords} | Radio: {radio} | Steps: {slider_step} | Guidance: {slider_guidance} | Natural: {slider_natural}'
-        )
+        # print(
+        #     f'[info] Prompt: {prompt} | Keywords: {keywords} | Radio: {radio} | Steps: {slider_step} | Guidance: {slider_guidance} | Natural: {slider_natural}'
+        # )
 
         # IMPORTANT: ensure prompt concatenation has a separator
         if len(positive_prompt.strip()) != 0:
@@ -866,13 +861,13 @@ class TextDiffuser(object):
             image_mask = image_mask.unsqueeze(0).unsqueeze(0).repeat(slider_batch, 1, 1, 1)
 
             image_tensor = self.to_tensor(image_for_model).unsqueeze(0).cuda().sub_(0.5).div_(0.5)
-            print(f"image_tensor.shape {image_tensor.shape}")
+            # print(f"image_tensor.shape {image_tensor.shape}")
 
             masked_image = image_tensor * (1 - image_mask)
             masked_feature = self.vae.encode(masked_image.half()).latent_dist.sample()
             masked_feature = masked_feature * self.vae.config.scaling_factor
             masked_feature = masked_feature.half()
-            print(f"masked_feature.shape {masked_feature.shape}")
+            # print(f"masked_feature.shape {masked_feature.shape}")
 
             feature_mask = torch.nn.functional.interpolate(image_mask, size=(64, 64), mode="nearest").cuda()
 
@@ -943,8 +938,8 @@ class TextDiffuser(object):
         # print(type(i))
         # exit(0)
 
-        print(
-            f'[info] Prompt: {prompt} | Keywords: {keywords} | Radio: {radio} | Steps: {slider_step} | Guidance: {slider_guidance} | Natural: {slider_natural}')
+        # print(
+        #     f'[info] Prompt: {prompt} | Keywords: {keywords} | Radio: {radio} | Steps: {slider_step} | Guidance: {slider_guidance} | Natural: {slider_natural}')
 
         # global stack
         # global state
@@ -993,8 +988,8 @@ class TextDiffuser(object):
                     outputs = m1_tokenizer.decode(
                         output_ids, skip_special_tokens=True, spaces_between_special_tokens=False
                     )
-                    print(f"[{conv.roles[0]}]\n{msg}")
-                    print(f"[{conv.roles[1]}]\n{outputs}")
+                    # print(f"[{conv.roles[0]}]\n{msg}")
+                    # print(f"[{conv.roles[1]}]\n{outputs}")
                     layout_image = get_layout_image(outputs)
 
                     ocrs = outputs.split('\n')
@@ -1005,8 +1000,8 @@ class TextDiffuser(object):
                     current_ocr = ocrs
 
                     ocr_ids = []
-                    print('user_prompt', user_prompt)
-                    print('current_ocr', current_ocr)
+                    # print('user_prompt', user_prompt)
+                    # print('current_ocr', current_ocr)
 
                     for ocr in current_ocr:
                         ocr = ocr.strip()
@@ -1070,7 +1065,7 @@ class TextDiffuser(object):
                             user_prompt += f' l{x0} t{y0} r{x1} b{y1} {text_str} <|endoftext|>'
 
                             draw.rectangle((x0 * 4, y0 * 4, x1 * 4, y1 * 4), fill=1)
-                            print('prompt ', user_prompt)
+                            # print('prompt ', user_prompt)
 
                         elif len(position) == 8:  # four points
                             x0, y0, x1, y1, x2, y2, x3, y3 = position
@@ -1090,7 +1085,7 @@ class TextDiffuser(object):
                             text_str = ' '.join([f'[{c}]' for c in list(text)])
                             user_prompt += f' l{xmin} t{ymin} r{xmax} b{ymax} {text_str} <|endoftext|>'
 
-                            print('prompt ', user_prompt)
+                            # print('prompt ', user_prompt)
 
                         prompt = self.tokenizer.encode(user_prompt)
                         composed_prompt = self.tokenizer.decode(prompt)
@@ -1121,12 +1116,12 @@ class TextDiffuser(object):
 
             image = Image.open(orig_i).convert("RGB").resize((512, 512))
             image_tensor = self.to_tensor(image).unsqueeze(0).cuda().sub_(0.5).div_(0.5)
-            print(f'image_tensor.shape {image_tensor.shape}')
+            # print(f'image_tensor.shape {image_tensor.shape}')
             masked_image = image_tensor * (1 - image_mask)
             masked_feature = self.vae.encode(masked_image.half()).latent_dist.sample()
             masked_feature = masked_feature * self.vae.config.scaling_factor
             masked_feature = masked_feature.half()
-            print(f'masked_feature.shape {masked_feature.shape}')
+            # print(f'masked_feature.shape {masked_feature.shape}')
 
             feature_mask = torch.nn.functional.interpolate(image_mask, size=(64, 64), mode='nearest').cuda()
 
@@ -1178,7 +1173,7 @@ class TextDiffuser(object):
             keywords: str = "",
             positive_prompt: str = "",
             guest_id: str = "-1",
-            scale_factor=2.,
+            scale_factor=3,
             regional_diffusion=True,
             answer_instruct=False,
     ) -> Image.Image:
@@ -1206,6 +1201,8 @@ class TextDiffuser(object):
                 text_position=kp,
             )
 
+        slider_guidance = 3
+
         # Generate the image with the text diffused
         if regional_diffusion:
             generate_image = self.text_to_image_regional(
@@ -1217,7 +1214,7 @@ class TextDiffuser(object):
                 positive_prompt=positive_prompt,
                 radio=radio,
                 slider_step=50,
-                slider_guidance=2.5,
+                slider_guidance=slider_guidance,
                 slider_batch=5,
                 slider_temperature=1,
                 slider_natural=False,
@@ -1234,7 +1231,7 @@ class TextDiffuser(object):
                 positive_prompt=positive_prompt,
                 radio=radio,
                 slider_step=50,
-                slider_guidance=2.5,
+                slider_guidance=slider_guidance,
                 slider_batch=1,
                 slider_temperature=1,
                 slider_natural=False

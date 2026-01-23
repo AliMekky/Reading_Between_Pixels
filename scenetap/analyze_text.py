@@ -55,6 +55,12 @@ if __name__ == "__main__":
     # som
     parser.add_argument("--slider", type=float, default=2)
     parser.add_argument("--filter", type=float, default=None)
+    
+    
+    # indices
+    parser.add_argument("--start", type=int, default=0)
+    parser.add_argument("--end", type=int, default=3153)
+
 
     # seed
     parser.add_argument("--seed", type=int, default=42)
@@ -122,6 +128,10 @@ if __name__ == "__main__":
     correct = 0
     total = 0
     for i, data in tqdm(enumerate(questions), total=len(questions)):
+        
+        if i < args.start or i >= args.end:
+            continue
+
         question_id = data["question_id"]
         image_name = data["image"]
         if ("vqav2" in args.dataset or "LingoQA" in args.dataset) and args.attack != "no_attack":
@@ -130,6 +140,12 @@ if __name__ == "__main__":
                 image_name = f"{image_name.split('.')[0]}_{question_id}.{image_name.split('.')[1]}"
         else:
             image_name_save = image_name
+        
+        # Check if image has already been processed
+        output_image_path = os.path.join(image_save_dir, image_name_save)
+        if os.path.exists(output_image_path):
+            continue
+        
         image_path = os.path.join(args.image_folder, image_name)
 
         question = data["question"]
@@ -143,26 +159,26 @@ if __name__ == "__main__":
 
 
             image.save(os.path.join(image_save_dir, f"{image_name_save}"))
-            seg_image.save(os.path.join(image_save_dir, f"{image_name_save.replace('png', '_segpng')}"))
+            seg_image.save(os.path.join(image_save_dir, f"{image_name_save.replace('jpg', '_seg.jpg')}"))
             # diffusion save path
             image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion",
-                                                    f"{image_name_save.replace('png', '')}")
+                                                    f"{image_name_save.replace('jpg', '')}")
             os.makedirs(image_save_dir_diffusion, exist_ok=True)
             for k, img in enumerate(images):
-                img.save(os.path.join(image_save_dir_diffusion, f"{k}png"))
+                img.save(os.path.join(image_save_dir_diffusion, f"{k}.jpg"))
         
         elif args.attack == "TextAnalysis":
             results = typo_attack_planner.generate_variants(image_path, question, correct_answer, options, model="gpt-4o-2024-08-06")
             for variant in ["misleading", "irrelevant", "correct"]:
                 images = results[variant]['diffusion_images']
                 image = images[0]
-                image.save(os.path.join(image_save_dir, f"{image_name_save.replace('.png', f'_{variant}.png')}"))
+                image.save(os.path.join(image_save_dir, f"{image_name_save.replace('.jpg', f'_{variant}.jpg')}"))
                 # diffusion save path
                 image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion",
-                                                        f"{image_name_save.replace('.png', '')}_{variant}")
+                                                        f"{image_name_save.replace('.jpg', '')}_{variant}")
                 os.makedirs(image_save_dir_diffusion, exist_ok=True)
                 for k, img in enumerate(images):
-                    img.save(os.path.join(image_save_dir_diffusion, f"{k}.png"))
+                    img.save(os.path.join(image_save_dir_diffusion, f"{k}.jpg"))
         else:
             image = Image.open(image_path).convert("RGB")
             images = [image]

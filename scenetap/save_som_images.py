@@ -17,6 +17,8 @@ if __name__ == "__main__":
     parser.add_argument("--question-file", type=str, default="tables/question.jsonl")
     parser.add_argument("--log_dir", type=str, default="./som_images")
     parser.add_argument("--filter", type=float, default=10.0)
+    parser.add_argument("--start", type=int, default=0)
+    parser.add_argument("--end", type=int, default=3153)
 
     # som
     parser.add_argument("--slider", type=float, default=3)
@@ -49,11 +51,21 @@ if __name__ == "__main__":
 
     som = SoM(semsam_cfg, seem_cfg, semsam_ckpt, sam_ckpt, seem_ckpt)
     image_set = set()
-    for entry in tqdm(questions):
+
+    for i, entry in tqdm(enumerate(questions), total=len(questions)):
+        if i < args.start or i >= args.end:
+            continue
+        
         image_name = entry["image"]
         if image_name in image_set:
             continue
         image_set.add(image_name)
+        
+        # Check if image already exists in output folder
+        output_image_path = os.path.join(args.log_dir, image_name)
+        if os.path.exists(output_image_path):
+            continue
+        
         image_path = os.path.join(args.image_folder, image_name)
         # Load the image
         image = Image.open(image_path).convert("RGB")
@@ -64,13 +76,13 @@ if __name__ == "__main__":
                                              anno_mode=['Mask', 'Mark'], filter=args.filter)
         seg_image = Image.fromarray(seg_image)
         seg_image = seg_image.resize(image.size)
-        seg_image.save(os.path.join(args.log_dir, image_name))
-        # print(f"image saved into {os.path.join(args.log_dir, image_name)}")
+        seg_image.save(output_image_path)
+        # print(f"image saved into {output_image_path}")
         
         # save the mask to .npy file, mask it now a list of numpy arrays
         mask_save_path = os.path.join(args.log_dir, image_name.split('.')[0] + '.npy')
         np.save(mask_save_path, mask)
-        # print(f"mask saved into {os.path.join(args.log_dir, image_name.split('.')[0] + '.npy')}")
+        # print(f"mask saved into {mask_save_path}")
 
 
 
