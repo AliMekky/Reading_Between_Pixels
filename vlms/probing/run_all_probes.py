@@ -2,12 +2,12 @@
 """
 Linear Probe Analysis for VLM Text Processing
 
-Clean implementation of 3 essential probes:
+Clean implementation of 4 essential probes:
 - Detection: N vs {C, M, I} - Does the model detect text presence?
 - Relevance: {C, M} vs I - Does the model distinguish relevant from irrelevant text?
 - Correctness: C vs M - Does the model distinguish correct from misleading text?
-
-Each probe tested across 4 token windows and 32 layers.
+- Malicious: M vs {N, C, I} - Is misleading text uniquely detectable vs everything else?
+Each probe is evaluated across layers and (for detection) across token windows.
 """
 
 import os
@@ -31,9 +31,10 @@ class Config:
     """Simple configuration."""
     ACTIVATIONS_DIR = "../activations_analysis/llava_next_data_v2_activations_new_windows"
     OUTPUT_DIR = "./probe_analysis_llava_next"
-    WINDOWS = ['single_token', 'last_vision_token', 'all_tokens']
 
-    NUM_LAYERS = 32
+    WINDOWS = ['single_token', 'last_vision_token', 'all_tokens', 'decision_token']
+
+    NUM_LAYERS = 32 # Adjust based on model
     CV_FOLDS = 5
     RANDOM_SEED = 42
 
@@ -54,6 +55,9 @@ def load_all_activations(activations_dir):
     
     print(f"Loading {len(files)} activation files...")
     
+
+    # the tensors are expected to have the following keys: f"{variant}_hidden_states_{window}"
+    # And each value is typically shaped like: [num_layers, hidden_dim] (where [layer_idx] gives a 4096-d vector)
     data = []
     for file_path in tqdm(files, desc="Loading"):
         tensors = torch.load(file_path, map_location='cpu')
@@ -74,9 +78,9 @@ def extract_features_detection(data, layer_idx, window):
     Tests: Does the model detect text presence at all?
     
     Returns:
-        X: [1416, 4096] - features (354 no-text + 1062 text)
-        y: [1416] - labels (0=no text, 1=has text)
-        groups: [1416] - question IDs
+        X: [4n, 4096] - features (n no-text + 3n text) --> based on the dataset sizes where n is the number of questions
+        y: [4n] - labels (0=no text, 1=has text)
+        groups: [4n] - question IDs --> have to be in the same split to avoid leakage (all the question variants should be together)
     """
     X_notext = []
     X_text = []
@@ -111,9 +115,9 @@ def extract_features_malicious(data, layer_idx, window):
     distinct from all other conditions?
     
     Returns:
-        X: [1416, 4096] - features (354 misleading + 1062 other)
-        y: [1416] - labels (1=misleading, 0=other)
-        groups: [1416] - question IDs
+        X: [4n, 4096] - features (n misleading + 3n other)
+        y: [4n] - labels (1=misleading, 0=other)
+        groups: [4n] - question IDs
     """
     X_misleading = []
     X_other = []
@@ -145,9 +149,9 @@ def extract_features_relevance(data, layer_idx, window):
     Tests: Does the model distinguish task-relevant from irrelevant text?
     
     Returns:
-        X: [1062, 4096] - features (708 relevant + 354 irrelevant)
-        y: [1062] - labels (1=relevant, 0=irrelevant)
-        groups: [1062] - question IDs
+        X: [3n, 4096] - features (2n relevant + n irrelevant)
+        y: [3n] - labels (1=relevant, 0=irrelevant)
+        groups: [3n] - question IDs
     """
     X_relevant = []
     X_irrelevant = []
@@ -179,9 +183,9 @@ def extract_features_correctness(data, layer_idx, window):
     Tests: Does the model distinguish correct from misleading text?
     
     Returns:
-        X: [708, 4096] - features
-        y: [708] - labels (1=correct, 0=misleading)
-        groups: [708] - question IDs
+        X: [2n, 4096] - features (n correct + n misleading)
+        y: [2n] - labels (1=correct, 0=misleading)
+        groups: [2n] - question IDs
     """
     X_correct = []
     X_misleading = []
@@ -237,7 +241,7 @@ def train_probe(X, y, groups, cv_folds=5, random_seed=42):
         
         # Evaluate
         auc = roc_auc_score(y_test, y_pred)
-        auc_scores.append(auc)
+        auc_scores.append(auc) #“How well can a linear classifier separate the two classes from this layer+window representation?”
     
     return {
         'auc_mean': float(np.mean(auc_scores)),
@@ -269,6 +273,7 @@ def run_probe_analysis(data, probe_type, window, config):
     
     results = []
     
+    ## Train a probe at each layer to see when the information is most accessible for each task
     for layer in tqdm(range(config.NUM_LAYERS), desc=f"Layers"):
         # Extract features based on probe type
         if probe_type == 'detection':
@@ -296,7 +301,7 @@ def run_probe_analysis(data, probe_type, window, config):
 
 def run_all_probes(data, config):
     """
-    Run all 3 essential probe configurations × 4 windows = 12 total.
+    Run all 4 essential probe configurations × 4 windows = 16 total.
     
     Returns:
         Dict with all results
