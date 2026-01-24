@@ -100,7 +100,7 @@ class BaseVLMEvaluator(ABC):
             if match:
                 return match.group(1)
         
-        return 'UNKNOWN'
+        raise ValueError(f"Unable to extract answer from response: {response}")
 
 
 class LlavaNextEvaluator(BaseVLMEvaluator):
@@ -114,6 +114,11 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
         self._initialize_answer_tokens()
     
     def _initialize_answer_tokens(self):
+        """
+        It precomputes the token IDs corresponding to the answer choices
+        'A', 'B', 'C', and 'D', including both standalone and space-prefixed forms,
+        to support multiple-choice answer handling.
+        """
         self.answer_token_ids = set()
         for letter in ['A', 'B', 'C', 'D']:
             token_ids = self.processor.tokenizer.encode(letter, add_special_tokens=False)
@@ -185,19 +190,22 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
         do_sample: bool = False
     ) -> Dict:
         """Extract activations from prefill phase with windows based on <image> tokens."""
+        ## STEP 1: load image and tokenize prompts
         image = self.load_image(image_path)
         inputs = self._prepare_inputs(image, prompt)
 
+        ## STEP 2: Find <image> token positions to determine the vision tokens window and last vision token position
         # We'll need input_ids on CPU to inspect token positions
         input_ids = inputs["input_ids"][0].detach().cpu()  # [seq_len]
-        # Use tokenizer to get the image token id (should be 32000 for LLaVA-NeXT)
+        # Use tokenizer to get the image token id 
         image_token_id = self.processor.tokenizer.convert_tokens_to_ids("<image>")
         print(f"  <image> token id: {image_token_id}")
-
         # Dynamically find all vision token positions
         vision_positions = (input_ids == image_token_id).nonzero(as_tuple=False).squeeze(-1).tolist()
         print(f"  Found {len(vision_positions)} vision tokens")
 
+
+        ## STEP 3: Register hooks to capture hidden states from all decoder layers
         hidden_states_all_layers: Dict[int, torch.Tensor] = {}
 
         def hidden_state_hook(module, input, output, layer_idx):
@@ -218,6 +226,7 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
             )
             hooks.append(hook)
 
+        # ----- STEP 4: Forward pass to get hidden states for prefill (no generation) -----
         # Forward pass to get hidden states for the *prefill* (no generation)
         with torch.inference_mode():
             _ = self.model(
@@ -244,13 +253,15 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
 
         print(f"  Sequence length: {seq_len}")
 
+
+        # ----- STEP 5: Generate answer and extract decision token hidden states -----
         # Now generate the answer (no hooks needed)
         with torch.inference_mode():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=do_sample,
-                output_hidden_states=True,
+                output_hidden_states=True, ## important to get hidden states
                 return_dict_in_generate=True,
             )
             output_ids = outputs.sequences
@@ -279,6 +290,12 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
                 # Add to results as a new window
         results["hidden_states_decision_token"] = decision_token_hidden
 
+        ## UNTIL HERE:
+        ## 1. We have hidden states from all layers for prefill phase in hidden_states_all_layers --> will be used to extract various windows
+        ## 2. We have decision token hidden states in decision_token_hidden
+
+
+        ## STEP 6: Define windows and extract averaged hidden states
         # ----- Define dynamic windows -----
         # 1) single_token: last token in the input sequence
         single_token_positions = [seq_len - 1] if seq_len > 0 else []
@@ -302,6 +319,8 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
             "all_tokens": all_token_positions,
         }
 
+
+        # Step 7: For each window, average activations per layer
         # ----- Extract and average hidden states for each window -----
         for window_name, token_positions in windows.items():
             hidden_averaged_per_layer: List[torch.Tensor] = []
