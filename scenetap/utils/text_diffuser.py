@@ -871,7 +871,8 @@ class TextDiffuser(object):
 
             feature_mask = torch.nn.functional.interpolate(image_mask, size=(64, 64), mode="nearest").cuda()
 
-            for t in tqdm(scheduler.timesteps):
+            # for t in tqdm(scheduler.timesteps):
+            for t in scheduler.timesteps:
                 noise_pred_cond = self.unet(
                     sample=latents,
                     timestep=t,
@@ -1125,7 +1126,8 @@ class TextDiffuser(object):
 
             feature_mask = torch.nn.functional.interpolate(image_mask, size=(64, 64), mode='nearest').cuda()
 
-            for t in tqdm(scheduler.timesteps):
+            # for t in tqdm(scheduler.timesteps):
+            for t in scheduler.timesteps:
                 with torch.no_grad():  # classifier free guidance
 
                     noise_pred_cond = self.unet(sample=input, timestep=t,

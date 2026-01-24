@@ -143,8 +143,15 @@ if __name__ == "__main__":
         
         # Check if image has already been processed
         output_image_path = os.path.join(image_save_dir, image_name_save)
-        if os.path.exists(output_image_path):
+
+        
+        # Also check diffusion subfolders for existing processed images
+        diffusion_base_path = "./logs/gpt-4o/typo_base_color/TextAnalysis/seed_42/diffusion2"
+        subfolders = [name.split('_')[0] for name in os.listdir(diffusion_base_path) if os.path.isdir(os.path.join(diffusion_base_path, name))]
+        if image_name_save.split('.')[0] in subfolders:
+            print(f"Image at index {i} already exists in diffusion subfolders, skipping...")
             continue
+
         
         image_path = os.path.join(args.image_folder, image_name)
 
@@ -170,12 +177,16 @@ if __name__ == "__main__":
         elif args.attack == "TextAnalysis":
             results = typo_attack_planner.generate_variants(image_path, question, correct_answer, options, model="gpt-4o-2024-08-06")
             for variant in ["misleading", "irrelevant", "correct"]:
+                image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion2",
+                                                        f"{image_name_save.replace('.jpg', '')}_{variant}")
+                if os.path.exists(image_save_dir_diffusion):
+                    print(f"Image at index {i} with variant {variant} already exists, skipping...")
+                    continue
+                
                 images = results[variant]['diffusion_images']
                 image = images[0]
                 image.save(os.path.join(image_save_dir, f"{image_name_save.replace('.jpg', f'_{variant}.jpg')}"))
                 # diffusion save path
-                image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion",
-                                                        f"{image_name_save.replace('.jpg', '')}_{variant}")
                 os.makedirs(image_save_dir_diffusion, exist_ok=True)
                 for k, img in enumerate(images):
                     img.save(os.path.join(image_save_dir_diffusion, f"{k}.jpg"))

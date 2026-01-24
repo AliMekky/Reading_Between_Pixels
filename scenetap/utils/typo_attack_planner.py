@@ -172,6 +172,8 @@ class TypoAttackPlanner:
         self.som_image_folder = som_image_folder
 
         self.diffuser = TextDiffuser()
+        self.irrelevant_rng = np.random.default_rng()
+
 
         # system instruction
         with open('prompt/position_caption_prompt.txt',
@@ -297,7 +299,9 @@ class TypoAttackPlanner:
             
 
             # irrelevant answer
-            IRRELEVANT_TEXT = random.choice(self.random_words)
+            self.irrelevant_rng = np.random.default_rng()
+            IRRELEVANT_TEXT = self.irrelevant_rng.choice(self.random_words)
+            # IRRELEVANT_TEXT = random.choice(self.random_words)
 
 
             # ============================================
@@ -323,26 +327,26 @@ class TypoAttackPlanner:
             )
             misleading_bbox_xyxy = [int(ml_left), int(ml_top), int(ml_right), int(ml_bottom)] ## to store in cache
 
-            dbg = image.copy()
-            d = ImageDraw.Draw(dbg)
-            d.rectangle(
-                [int(base_left), int(base_top), int(base_right), int(base_bottom)],
-                outline="red", width=4
-            )
+            # dbg = image.copy()
+            # d = ImageDraw.Draw(dbg)
+            # d.rectangle(
+            #     [int(base_left), int(base_top), int(base_right), int(base_bottom)],
+            #     outline="red", width=4
+            # )
 
-            # draw final text bbox
-            d.rectangle(
-                [int(ml_left), int(ml_top), int(ml_right), int(ml_bottom)],
-                outline="green", width=4
-            )
+            # # draw final text bbox
+            # d.rectangle(
+            #     [int(ml_left), int(ml_top), int(ml_right), int(ml_bottom)],
+            #     outline="green", width=4
+            # )
 
-            dbg.save("./debug_global_bbox.png")
-            print("Saved debug_global_bbox.png")
+            # dbg.save("./debug_global_bbox.png")
+            # print("Saved debug_global_bbox.png")
 
             # Create two-point positions for diffusion
             # point_positions = [(int(left), int(top)), (int(right), int(bottom))]
-            print("IMAGE SIZE:", image.width, image.height)
-            print("RAW BOX:", ml_left, ml_top, ml_right, ml_bottom)
+            # print("IMAGE SIZE:", image.width, image.height)
+            # print("RAW BOX:", ml_left, ml_top, ml_right, ml_bottom)
 
             point_positions = [
                 (int(ml_left),  int(ml_top)),     # top-left
@@ -360,7 +364,7 @@ class TypoAttackPlanner:
                 CAPTION, 
                 # radio="Two Points",
                 radio="Four Points",
-                positive_prompt = positive_prompt,
+                # positive_prompt = positive_prompt,
                 scale_factor=3, 
                 regional_diffusion=True
             )
@@ -401,7 +405,7 @@ class TypoAttackPlanner:
                 CAPTION,
                 # radio="Two Points",
                 radio="Four Points",
-                positive_prompt = positive_prompt,
+                # positive_prompt = positive_prompt,
                 scale_factor=3,             # 2–3 is more stable than 4
                 regional_diffusion=True,
             )
@@ -444,7 +448,7 @@ class TypoAttackPlanner:
                 CAPTION, 
                 # radio="Two Points",
                 radio="Four Points",
-                positive_prompt = positive_prompt,
+                # positive_prompt = positive_prompt,
                 scale_factor=3, 
                 regional_diffusion=True
             )
