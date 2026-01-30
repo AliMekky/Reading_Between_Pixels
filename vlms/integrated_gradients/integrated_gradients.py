@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import zoom
 
 # Your VLM evaluator wrapper (must expose .model, .processor, .device)
-from infere_vlms import get_evaluator
+from reading_between_pixels.Reading_Between_Pixels.vlms.inference.infere_vlms import get_evaluator
 
 
 class ImageVariantAnalyzer:
