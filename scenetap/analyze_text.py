@@ -177,7 +177,7 @@ if __name__ == "__main__":
         elif args.attack == "TextAnalysis":
             results = typo_attack_planner.generate_variants(image_path, question, correct_answer, options, model="gpt-4o-2024-08-06")
             for variant in ["misleading", "irrelevant", "correct"]:
-                image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion2",
+                image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion3",
                                                         f"{image_name_save.replace('.jpg', '')}_{variant}")
                 if os.path.exists(image_save_dir_diffusion):
                     print(f"Image at index {i} with variant {variant} already exists, skipping...")
