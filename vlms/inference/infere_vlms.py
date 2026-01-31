@@ -351,7 +351,7 @@ class BaseVLMEvaluator(ABC):
         tokenizer = getattr(self.processor, "tokenizer", None)
         if tokenizer is not None and sid is not None:
             os.makedirs("logits_debug", exist_ok=True)
-            debug_path = os.path.join("logits_debug", f"logits_{variant}_{self.model_id}_{sid}.json")
+            debug_path = os.path.join("logits_debug", f"logits_{variant}_{self.model_id.replace('/', '_')}_{sid}.json")
             save_generation_logits(gen_out, tokenizer, inputs, debug_path)
         
         return response
@@ -372,7 +372,7 @@ class BaseVLMEvaluator(ABC):
             sids = sample_ids[i:i+batch_size] if sample_ids else [None] * len(batch_images)
             
             for img_input, prompt, sid in zip(batch_images, batch_prompts, sids):
-                response = self.process_single(img_input, prompt, max_new_tokens, do_sample, sid, variant=variant)
+                response = self.process_single(img_input, prompt, max_new_tokens, do_sample, sid, variant)
                 all_responses.append(response)
         
         return all_responses
@@ -660,7 +660,7 @@ class InternVLEvaluator(BaseVLMEvaluator):
     def process_single(self, image_input, prompt: str, 
                       max_new_tokens: int = 200, 
                       do_sample: bool = False, 
-                      sid: str = None) -> str:
+                      sid: str = None, variant: str = None) -> str:
         """Process a single image with InternVL."""
         image = self.load_image(image_input)
         pixel_values = self.load_image_func(image, max_num=12).to(torch.bfloat16).to(self.device)

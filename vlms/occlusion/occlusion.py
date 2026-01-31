@@ -37,7 +37,7 @@ from torch.nn.functional import log_softmax
 import matplotlib.pyplot as plt
 from scipy.ndimage import zoom
 
-from infere_vlms import get_evaluator
+from reading_between_pixels.Reading_Between_Pixels.vlms.inference.infere_vlms import get_evaluator
 
 
 class ImprovedOcclusionAnalyzer:
