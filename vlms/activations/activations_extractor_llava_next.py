@@ -1,6 +1,6 @@
 """
-VLM MCQ Evaluator with Activation Extraction - Updated with Multiple Token Windows
-Extracts from: vision tokens, after-vision tokens, decision tokens, and single token
+VLM MCQ Evaluator with Activation Extraction - HuggingFace Dataset Version
+WITH DETAILED DEBUGGING TO FILE
 """
 
 import torch
@@ -9,10 +9,15 @@ import json
 import argparse
 from pathlib import Path
 from typing import List, Dict, Union, Optional
-from PIL import Image
+from PIL import Image, ImageFile
 from transformers import AutoProcessor, LlavaForConditionalGeneration
 from tqdm import tqdm
 from abc import ABC, abstractmethod
+from datetime import datetime
+
+from datasets import load_dataset, load_from_disk, DatasetDict
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Conditional imports
 try:
@@ -22,6 +27,135 @@ except ImportError:
     LLAVA_NEXT_AVAILABLE = False
     print("Error: LLaVA-NeXT not available. Install with: pip install -U transformers")
 
+
+# ==================== HF Dataset Utilities ====================
+
+def sanitize_repo_id(repo_id: str) -> str:
+    """Make a filesystem-safe name for caching."""
+    return repo_id.replace("/", "__").replace(" ", "_")
+
+
+def get_or_download_hf_dataset(
+    dataset_id: str, 
+    local_cache_root: str = "./hf_dataset_local_cache",
+    split: str = "test"
+):
+    """Download or load cached HF dataset."""
+    local_cache_root = Path(local_cache_root)
+    local_cache_root.mkdir(parents=True, exist_ok=True)
+    safe_name = sanitize_repo_id(dataset_id)
+    cache_dir = local_cache_root / safe_name
+
+    if cache_dir.exists():
+        print(f"✓ Loading dataset from cache: {cache_dir}")
+        return load_from_disk(str(cache_dir))
+
+    print(f"⬇️  Downloading '{dataset_id}'...")
+    ds = load_dataset(dataset_id, split=split)
+    
+    try:
+        ds.save_to_disk(str(cache_dir))
+        print(f"✓ Saved to cache: {cache_dir}")
+    except Exception as e:
+        print(f"⚠️  Cache save failed: {e}")
+    
+    return ds
+
+
+def load_questions_from_hf_dataset(dataset_id: str, cache_dir: str = "./hf_dataset_local_cache") -> List[Dict]:
+    """Load questions from HuggingFace dataset."""
+    print(f"Loading HuggingFace dataset: {dataset_id}")
+    ds = get_or_download_hf_dataset(dataset_id, cache_dir, split="test")
+    
+    if isinstance(ds, DatasetDict):
+        split_name = "test" if "test" in ds else list(ds.keys())[0]
+        dataset = ds[split_name]
+    else:
+        dataset = ds
+    
+    print(f"Dataset size: {len(dataset)} samples")
+    
+    variants = ['notext', 'correct', 'irrelevant', 'misleading']
+    questions_data = []
+    
+    print("Building questions list...")
+    for idx in tqdm(range(len(dataset)), desc="Loading questions"):
+        try:
+            sample = dataset[idx]
+            
+            question_id = sample.get("question_id") or f"q_{idx}"
+            question = sample.get("question", "")
+            choices = sample.get("choices", [])
+            
+            options = {}
+            labels = ["A", "B", "C", "D"]
+            for i, lbl in enumerate(labels):
+                options[lbl] = choices[i] if i < len(choices) else ""
+            
+            answer = sample.get("answer", "")
+            
+            image_variants = {}
+            for variant in variants:
+                img_obj = sample.get(variant)
+                if img_obj is not None:
+                    if isinstance(img_obj, Image.Image):
+                        image_variants[variant] = img_obj
+                    else:
+                        print(f"⚠️  Unexpected image type for {question_id}/{variant}: {type(img_obj)}")
+            
+            if image_variants:
+                questions_data.append({
+                    'question_id': question_id,
+                    'question': question,
+                    'options': options,
+                    'answer': answer,
+                    'image_variants': image_variants
+                })
+        
+        except Exception as e:
+            print(f"⚠️  Error loading sample {idx}: {e}")
+            continue
+    
+    print(f"✓ Loaded {len(questions_data)} questions with image variants\n")
+    return questions_data
+
+
+# ==================== Debug Logger ====================
+
+class DebugLogger:
+    """Logger that writes to both console and file."""
+    
+    def __init__(self, log_file: Optional[str] = None, console: bool = True):
+        self.console = console
+        self.log_file = None
+        
+        if log_file:
+            self.log_file = open(log_file, 'w', encoding='utf-8')
+            self.write(f"Debug log started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.write("="*80 + "\n\n")
+    
+    def write(self, message: str):
+        """Write message to file and optionally console."""
+        if self.console:
+            print(message, end='')
+        
+        if self.log_file:
+            self.log_file.write(message)
+            self.log_file.flush()  # Ensure immediate write
+    
+    def close(self):
+        """Close the log file."""
+        if self.log_file:
+            self.write(f"\n\nDebug log ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.log_file.close()
+            self.log_file = None
+    
+    def __del__(self):
+        """Ensure file is closed on deletion."""
+        self.close()
+
+
+# ==================== Base Evaluator ====================
 
 class BaseVLMEvaluator(ABC):
     """Abstract base class for VLM evaluators."""
@@ -51,8 +185,11 @@ class BaseVLMEvaluator(ABC):
     def _decode_output(self, output) -> str:
         pass
     
-    def load_image(self, image_path: str) -> Image.Image:
-        return Image.open(image_path).convert('RGB')
+    def load_image(self, image_input: Union[str, Image.Image]) -> Image.Image:
+        """Load image from path or return PIL Image directly."""
+        if isinstance(image_input, Image.Image):
+            return image_input.convert('RGB')
+        return Image.open(image_input).convert('RGB')
     
     def format_mcq_prompt(self, question: str, options: Dict[str, str], 
                           instruction: str = None) -> str:
@@ -103,30 +240,41 @@ class BaseVLMEvaluator(ABC):
         raise ValueError(f"Unable to extract answer from response: {response}")
 
 
+# ==================== LLaVA-NeXT Evaluator ====================
+
 class LlavaNextEvaluator(BaseVLMEvaluator):
-    """LLaVA-NeXT evaluator with activation extraction from multiple token windows."""
+    """LLaVA-NeXT evaluator with activation extraction and detailed debugging."""
     
-    def __init__(self, model_id: str, device: str = None):
+    def __init__(self, model_id: str, device: str = None, debug_logger: Optional[DebugLogger] = None):
+        self.logger = debug_logger  # ← Logger instance
         if not LLAVA_NEXT_AVAILABLE:
             raise ImportError("LLaVA-NeXT requires: pip install -U transformers")
         super().__init__(model_id, device)
         self.answer_token_ids = None
         self._initialize_answer_tokens()
     
+    def _debug_print(self, msg: str, level: int = 0):
+        """Helper for debug printing with indentation."""
+        if self.logger:
+            indent = "  " * level
+            self.logger.write(f"{indent}{msg}\n")
+    
     def _initialize_answer_tokens(self):
-        """
-        It precomputes the token IDs corresponding to the answer choices
-        'A', 'B', 'C', and 'D', including both standalone and space-prefixed forms,
-        to support multiple-choice answer handling.
-        """
+        """Precompute token IDs for answer choices A/B/C/D."""
+        self._debug_print("\n=== Initializing Answer Tokens ===")
         self.answer_token_ids = set()
         for letter in ['A', 'B', 'C', 'D']:
             token_ids = self.processor.tokenizer.encode(letter, add_special_tokens=False)
             if token_ids:
                 self.answer_token_ids.add(token_ids[0])
+                self._debug_print(f"Token for '{letter}': {token_ids[0]}", level=1)
+            
             token_ids_space = self.processor.tokenizer.encode(f" {letter}", add_special_tokens=False)
             if token_ids_space:
                 self.answer_token_ids.add(token_ids_space[-1])
+                self._debug_print(f"Token for ' {letter}': {token_ids_space[-1]}", level=1)
+        
+        self._debug_print(f"All answer token IDs: {self.answer_token_ids}\n")
     
     def _load_model(self):
         from transformers import LlavaNextForConditionalGeneration, LlavaNextProcessor
@@ -140,11 +288,15 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
         self.model.eval()
 
         vision_config = self.model.vision_tower.config
-        print(vision_config)
+        print(f"Vision Config: {vision_config}")
         
         self.processor = LlavaNextProcessor.from_pretrained(self.model_id)
     
     def _prepare_inputs(self, image: Image.Image, prompt: str) -> Dict:
+        self._debug_print("\n=== Preparing Inputs ===")
+        self._debug_print(f"Image size: {image.size}", level=1)
+        self._debug_print(f"Prompt length: {len(prompt)} chars", level=1)
+        
         conversation = [
             {
                 "role": "user",
@@ -159,19 +311,27 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
             conversation, add_generation_prompt=True
         )
         
-        inputs = self.processor(images=image, text=formatted_prompt, return_tensors='pt')
-        out = self.processor.decode(inputs["input_ids"][0])
-
-        # print the total number of tokens
-        num_tokens = inputs["input_ids"].shape[1]
-        print(f"  Total input tokens: {num_tokens}")
-        # with open(f"decoded_input_ids_{num_tokens}.txt", "w", encoding="utf-8") as f:
-        #     f.write(out)
-
-        print(f"  length pixel values:\n{inputs['pixel_values'].shape if 'pixel_values' in inputs else 'N/A'}\n")
-    
+        self._debug_print(f"Formatted prompt length: {len(formatted_prompt)} chars", level=1)
         
-
+        inputs = self.processor(images=image, text=formatted_prompt, return_tensors='pt')
+        
+        # Debug: Print input statistics
+        num_tokens = inputs["input_ids"].shape[1]
+        self._debug_print(f"Total input tokens: {num_tokens}", level=1)
+        
+        if 'pixel_values' in inputs:
+            self._debug_print(f"Pixel values shape: {inputs['pixel_values'].shape}", level=1)
+        
+        if 'image_sizes' in inputs:
+            self._debug_print(f"Image sizes: {inputs['image_sizes']}", level=1)
+        
+        # Decode and show the tokenized input
+        decoded_input = self.processor.tokenizer.decode(inputs["input_ids"][0])
+        self._debug_print(f"\n--- Decoded Input (first 500 chars) ---", level=1)
+        self._debug_print(decoded_input[:500], level=2)
+        if len(decoded_input) > 500:
+            self._debug_print("...", level=2)
+        
         inputs = inputs.to(self.device)
         
         if 'pixel_values' in inputs:
@@ -179,62 +339,85 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
         
         return inputs
     
-    def _decode_output(self, output) -> str:
-        return self.processor.decode(output[0], skip_special_tokens=True)
-    
     def extract_activations_with_answer(
         self, 
-        image_path: str, 
+        image_input: Union[str, Image.Image],
         prompt: str,
         max_new_tokens: int = 50,
         do_sample: bool = False
     ) -> Dict:
-        """Extract activations from prefill phase with windows based on <image> tokens."""
-        ## STEP 1: load image and tokenize prompts
-        image = self.load_image(image_path)
+        """Extract activations with comprehensive debugging."""
+        
+        self._debug_print("\n" + "="*80)
+        self._debug_print("STARTING ACTIVATION EXTRACTION")
+        self._debug_print("="*80)
+        
+        ## STEP 1: Load image and prepare inputs
+        self._debug_print("\n### STEP 1: Loading Image and Tokenizing ###")
+        image = self.load_image(image_input)
         inputs = self._prepare_inputs(image, prompt)
-
-        ## STEP 2: Find <image> token positions to determine the vision tokens window and last vision token position
-        # We'll need input_ids on CPU to inspect token positions
-        input_ids = inputs["input_ids"][0].detach().cpu()  # [seq_len]
-        # Use tokenizer to get the image token id 
+        
+        ## STEP 2: Find <image> token positions
+        self._debug_print("\n### STEP 2: Finding <image> Token Positions ###")
+        input_ids = inputs["input_ids"][0].detach().cpu()
+        seq_len = input_ids.shape[0]
+        
+        self._debug_print(f"Input sequence length: {seq_len}", level=1)
+        
+        # Get <image> token id
         image_token_id = self.processor.tokenizer.convert_tokens_to_ids("<image>")
-        print(f"  <image> token id: {image_token_id}")
-        # Dynamically find all vision token positions
+        self._debug_print(f"<image> token ID: {image_token_id}", level=1)
+        
+        # Find all positions
         vision_positions = (input_ids == image_token_id).nonzero(as_tuple=False).squeeze(-1).tolist()
-        print(f"  Found {len(vision_positions)} vision tokens")
-
-
-        ## STEP 3: Register hooks to capture hidden states from all decoder layers
+        self._debug_print(f"Found {len(vision_positions)} <image> tokens at positions: {vision_positions}", level=1)
+        
+        # Debug: Show tokens around <image> positions
+        if vision_positions and self.logger:
+            self._debug_print("\n--- Context around <image> tokens ---", level=1)
+            for i, pos in enumerate(vision_positions[:5]):  # Show first 5
+                start = max(0, pos - 5)
+                end = min(seq_len, pos + 6)
+                context_ids = input_ids[start:end].tolist()
+                context_tokens = [self.processor.tokenizer.decode([tid]) for tid in context_ids]
+                
+                self._debug_print(f"\n<image> token #{i+1} at position {pos}:", level=2)
+                self._debug_print(f"  Token IDs: {context_ids}", level=3)
+                self._debug_print(f"  Tokens: {context_tokens}", level=3)
+                
+                # Show the decoded string
+                decoded_context = self.processor.tokenizer.decode(input_ids[start:end])
+                self._debug_print(f"  Decoded: '{decoded_context}'", level=3)
+        
+        ## STEP 3: Register hooks
+        self._debug_print("\n### STEP 3: Registering Hooks ###")
         hidden_states_all_layers: Dict[int, torch.Tensor] = {}
 
         def hidden_state_hook(module, input, output, layer_idx):
-            """
-            Collect hidden states from each layer.
-            output[0] has shape [batch_size, seq_len, hidden_dim]
-            """
+            """Collect hidden states from each layer."""
             hidden_states_all_layers[layer_idx] = output[0].detach().cpu()
+            if self.logger and layer_idx % 8 == 0:  # Debug every 8th layer
+                self._debug_print(f"  Captured layer {layer_idx}: shape {output[0].shape}", level=2)
 
-        # Register hooks on all decoder layers
         hooks = []
         decoder_layers = self.model.model.language_model.layers
-
-        print(f"  Registering hooks on {len(decoder_layers)} layers...")
+        self._debug_print(f"Registering hooks on {len(decoder_layers)} decoder layers...", level=1)
+        
         for idx, layer in enumerate(decoder_layers):
             hook = layer.register_forward_hook(
                 lambda module, inp, out, idx=idx: hidden_state_hook(module, inp, out, idx)
             )
             hooks.append(hook)
 
-        # ----- STEP 4: Forward pass to get hidden states for prefill (no generation) -----
-        # Forward pass to get hidden states for the *prefill* (no generation)
+        ## STEP 4: Forward pass (prefill)
+        self._debug_print("\n### STEP 4: Forward Pass (Prefill) ###")
         with torch.inference_mode():
             _ = self.model(
                 input_ids=inputs["input_ids"],
                 pixel_values=inputs.get("pixel_values"),
                 image_sizes=inputs.get("image_sizes"),
                 attention_mask=inputs.get("attention_mask"),
-                output_hidden_states=False,  # we use our own hooks
+                output_hidden_states=False,
             )
 
         # Remove hooks
@@ -244,73 +427,87 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
         if not hidden_states_all_layers:
             raise RuntimeError("No hidden states were collected from hooks.")
 
-        # Determine sequence length from one layer
-        example_layer = next(iter(hidden_states_all_layers.values()))
+        # Debug: Check collected hidden states
+        self._debug_print(f"Collected hidden states from {len(hidden_states_all_layers)} layers", level=1)
+        example_layer = hidden_states_all_layers[0]
+        self._debug_print(f"Example (layer 0) shape: {example_layer.shape}", level=1)
+        
+        # Determine actual sequence length from hidden states
+        if example_layer.dim() == 3:
+            actual_seq_len = example_layer.shape[1]
+        elif example_layer.dim() == 2:
+            actual_seq_len = example_layer.shape[0]
+        else:
+            raise ValueError(f"Unexpected hidden state dimensions: {example_layer.shape}")
+        
+        self._debug_print(f"Actual sequence length from hidden states: {actual_seq_len}", level=1)
 
-
-        seq_len = hidden_states_all_layers[0].shape[0]
-        print(seq_len)
-
-        print(f"  Sequence length: {seq_len}")
-
-
-        # ----- STEP 5: Generate answer and extract decision token hidden states -----
-        # Now generate the answer (no hooks needed)
+        ## STEP 5: Generate answer
+        self._debug_print("\n### STEP 5: Generating Answer ###")
         with torch.inference_mode():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=do_sample,
-                output_hidden_states=True, ## important to get hidden states
+                output_hidden_states=True,
                 return_dict_in_generate=True,
             )
             output_ids = outputs.sequences
 
-        # outputs.hidden_states is a tuple of tuples
-        # Structure: (step1, step2, ...) where each step has (layer0, layer1, ..., layerN)
-        # We want the FIRST generated token (step 0)
+        # Debug generated tokens
+        generated_ids = output_ids[0, seq_len:].cpu().tolist()
+        self._debug_print(f"Generated {len(generated_ids)} new tokens", level=1)
+        self._debug_print(f"Generated token IDs: {generated_ids}", level=2)
+        
+        generated_tokens = [self.processor.tokenizer.decode([tid]) for tid in generated_ids]
+        self._debug_print(f"Generated tokens: {generated_tokens}", level=2)
+        
+        # Show full generated text
+        full_generated = self.processor.tokenizer.decode(output_ids[0, seq_len:])
+        self._debug_print(f"Full generated text: '{full_generated}'", level=2)
+        
+        # Extract decision token hidden states
+        decision_token_hidden = []
         if hasattr(outputs, 'hidden_states') and outputs.hidden_states:
-            first_gen_token_states = outputs.hidden_states[0]  # First generation step
+            first_gen_token_states = outputs.hidden_states[0]
+            self._debug_print(f"Decision token hidden states: {len(first_gen_token_states)} layers", level=1)
             
-            # Extract from each layer for the decision token
-            decision_token_hidden = []
-            for layer_states in first_gen_token_states:
-                # layer_states shape: [batch, 1, hidden_dim] (since it's one new token)
+            for layer_idx, layer_states in enumerate(first_gen_token_states):
                 decision_token_hidden.append(layer_states[0, -1, :].detach().cpu())
-            
-
+                if self.logger and layer_idx % 8 == 0:
+                    self._debug_print(f"  Layer {layer_idx} decision token shape: {layer_states[0, -1, :].shape}", level=2)
 
         response = self._decode_output(output_ids)
+        self._debug_print(f"\nFull response: {response}", level=1)
 
         results: Dict[str, Union[str, int, List[torch.Tensor]]] = {
             "response": response,
-            "seq_len": seq_len,
+            "seq_len": actual_seq_len,
             "predicted_answer": self.extract_answer(response),
         }
-                # Add to results as a new window
         results["hidden_states_decision_token"] = decision_token_hidden
 
-        ## UNTIL HERE:
-        ## 1. We have hidden states from all layers for prefill phase in hidden_states_all_layers --> will be used to extract various windows
-        ## 2. We have decision token hidden states in decision_token_hidden
-
-
-        ## STEP 6: Define windows and extract averaged hidden states
-        # ----- Define dynamic windows -----
-        # 1) single_token: last token in the input sequence
-        single_token_positions = [seq_len - 1] if seq_len > 0 else []
-
-        # 2) vision_tokens: all <image> positions
+        ## STEP 6: Define windows
+        self._debug_print("\n### STEP 6: Defining Token Windows ###")
+        
+        single_token_positions = [actual_seq_len - 1] if actual_seq_len > 0 else []
+        self._debug_print(f"single_token window: positions {single_token_positions}", level=1)
+        
         vision_token_positions = vision_positions
-
-        # 3) last_vision_token
+        if len(vision_token_positions) > 10:
+            self._debug_print(f"vision_tokens window: {len(vision_token_positions)} positions {vision_token_positions[:10]}...", level=1)
+        else:
+            self._debug_print(f"vision_tokens window: {len(vision_token_positions)} positions {vision_token_positions}", level=1)
+        
         if vision_positions:
             last_vision_token_positions = [max(vision_positions)]
+            self._debug_print(f"last_vision_token window: position {last_vision_token_positions}", level=1)
         else:
             last_vision_token_positions = []
+            self._debug_print(f"last_vision_token window: EMPTY (no vision tokens found)", level=1)
 
-        # 4) all_tokens: 0 .. seq_len-1
-        all_token_positions = list(range(seq_len))
+        all_token_positions = list(range(actual_seq_len))
+        self._debug_print(f"all_tokens window: {len(all_token_positions)} positions [0...{actual_seq_len-1}]", level=1)
 
         windows: Dict[str, List[int]] = {
             "single_token": single_token_positions,
@@ -319,10 +516,13 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
             "all_tokens": all_token_positions,
         }
 
-
-        # Step 7: For each window, average activations per layer
-        # ----- Extract and average hidden states for each window -----
+        ## STEP 7: Extract and average hidden states per window
+        self._debug_print("\n### STEP 7: Extracting Averaged Hidden States per Window ###")
+        
         for window_name, token_positions in windows.items():
+            self._debug_print(f"\nProcessing window: {window_name}", level=1)
+            self._debug_print(f"  Number of tokens: {len(token_positions)}", level=2)
+            
             hidden_averaged_per_layer: List[torch.Tensor] = []
 
             for layer_idx in sorted(hidden_states_all_layers.keys()):
@@ -331,9 +531,10 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
                 tokens_in_window: List[torch.Tensor] = []
 
                 if not token_positions:
-                    # No tokens in this window (e.g., no vision tokens)
                     averaged_hidden = torch.zeros(layer_hidden.shape[-1])
                     hidden_averaged_per_layer.append(averaged_hidden)
+                    if self.logger and layer_idx == 0:
+                        self._debug_print(f"  Layer {layer_idx}: Empty window, using zero vector", level=3)
                     continue
 
                 if layer_hidden.dim() == 3:
@@ -351,25 +552,33 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
 
                 if tokens_in_window:
                     averaged_hidden = torch.stack(tokens_in_window, dim=0).mean(dim=0)
+                    if self.logger and layer_idx % 8 == 0:
+                        self._debug_print(f"  Layer {layer_idx}: Averaged {len(tokens_in_window)} tokens -> shape {averaged_hidden.shape}", level=3)
                 else:
                     averaged_hidden = torch.zeros(layer_hidden.shape[-1])
+                    if self.logger and layer_idx == 0:
+                        self._debug_print(f"  Layer {layer_idx}: No valid tokens, using zero vector", level=3)
 
                 hidden_averaged_per_layer.append(averaged_hidden)
 
             results[f"hidden_states_{window_name}"] = hidden_averaged_per_layer
-            print(f"    Window '{window_name}': averaged {len(token_positions)} tokens")
+            self._debug_print(f"  ✓ Window '{window_name}': {len(hidden_averaged_per_layer)} layers, {len(token_positions)} tokens averaged", level=2)
 
-        # Default "main" representation: you can choose which to prefer downstream
-        # For example: last_vision_token or single_token.
-        # Here we choose the single last token as a simple baseline:
+        # Default "main" representation
         results["hidden_states"] = results["hidden_states_single_token"]
+
+        self._debug_print("\n" + "="*80)
+        self._debug_print("ACTIVATION EXTRACTION COMPLETE")
+        self._debug_print("="*80 + "\n")
 
         return results
 
-
+    def _decode_output(self, output) -> str:
+        return self.processor.decode(output[0], skip_special_tokens=True)
+    
     def evaluate_mcq_with_activations(
         self,
-        image_variants: Dict[str, str],
+        image_variants: Dict[str, Union[str, Image.Image]],
         question: str,
         options: Dict[str, str],
         correct_answer: str = None,
@@ -385,19 +594,32 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
             'variants': {}
         }
         
-        for variant_name, image_path in image_variants.items():
-            print(f"  Processing variant: {variant_name}...")
+        for variant_name, image_input in image_variants.items():
+            self._debug_print(f"\n{'#'*80}")
+            self._debug_print(f"Processing variant: {variant_name}")
+            self._debug_print(f"{'#'*80}")
+            
+            # Also print to console
+            print(f"\n  Processing variant: {variant_name}...")
             
             variant_result = self.extract_activations_with_answer(
-                image_path=image_path,
+                image_input=image_input,
                 prompt=prompt,
                 max_new_tokens=max_new_tokens
             )
             
             results['variants'][variant_name] = variant_result
             
-            print(f"    Predicted: {variant_result['predicted_answer']}")
-            print(f"    Sequence length: {variant_result.get('seq_len', 0)}")
+            self._debug_print(f"\n{'='*40}")
+            self._debug_print(f"VARIANT RESULT: {variant_name}")
+            self._debug_print(f"  Predicted: {variant_result['predicted_answer']}")
+            self._debug_print(f"  Correct: {correct_answer}")
+            self._debug_print(f"  Match: {variant_result['predicted_answer'] == correct_answer}")
+            self._debug_print(f"  Sequence length: {variant_result.get('seq_len', 0)}")
+            self._debug_print(f"{'='*40}\n")
+            
+            # Also print to console
+            print(f"    Predicted: {variant_result['predicted_answer']} | Correct: {correct_answer}")
         
         return results
     
@@ -422,7 +644,6 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
                 'seq_len': variant_data.get('seq_len', 0)
             }
             
-            # Save hidden states for all windows
             for key in variant_data.keys():
                 if key.startswith('hidden_states_'):
                     if variant_data[key]:
@@ -434,65 +655,7 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
         with open(output_path.with_suffix('.json'), 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        print(f"  Saved to: {output_path.with_suffix('.pt')} and .json\n")
-
-
-def load_questions_from_filtered_data(data_folder: str) -> List[Dict]:
-    """
-    Load questions from filtered_data structure.
-    Each variant has its own JSON file with different image names.
-    """
-    data_folder = Path(data_folder)
-    
-    # Define the variants we need
-    variants = ['notext', 'irrelevant', 'correct', 'misleading']
-    
-    # Load all JSON files
-    variant_data = {}
-    for variant in variants:
-        json_file = data_folder / f'filtered_questions_{variant}.json'
-        if json_file.exists():
-            with open(json_file, 'r') as f:
-                variant_data[variant] = json.load(f)
-        else:
-            print(f"Warning: JSON file not found: {json_file}")
-    
-    if not variant_data:
-        raise FileNotFoundError(f"No question JSON files found in {data_folder}")
-    
-    # Use the first available variant as base for question structure
-    base_variant = list(variant_data.keys())[0]
-    base_questions = variant_data[base_variant]
-    
-    questions_data = []
-    
-    for idx, base_item in enumerate(base_questions):
-        question_dict = {
-            'question_id': base_item.get('id', base_item.get('question_id', f'q{idx+1}')),
-            'question': base_item['question'],
-            'options': base_item['options'],
-            'answer': base_item.get('answer', base_item.get('correct_answer', '')),
-            'image_variants': {}
-        }
-        
-        # For each variant, get the corresponding image
-        for variant in variants:
-            if variant in variant_data and idx < len(variant_data[variant]):
-                variant_item = variant_data[variant][idx]
-                image_name = variant_item.get('image', '')
-                
-                if image_name:
-                    variant_image_path = data_folder / variant / image_name
-                    if variant_image_path.exists():
-                        question_dict['image_variants'][variant] = str(variant_image_path)
-                    else:
-                        print(f"Warning: Image not found: {variant_image_path}")
-        
-        # Only add if we have at least some variants
-        if question_dict['image_variants']:
-            questions_data.append(question_dict)
-    
-    return questions_data
+        self._debug_print(f"  Saved to: {output_path.with_suffix('.pt')} and .json\n")
 
 
 def process_all_questions(
@@ -517,6 +680,7 @@ def process_all_questions(
         question_id = item.get('question_id', f'q{idx+1}')
         print(f"\n[Question {idx+1}/{total_questions}] ID: {question_id}")
         print(f"Question: {item['question'][:80]}...")
+        
         if not item['image_variants']:
             print(f"  Skipping: No image variants found")
             continue
@@ -551,7 +715,7 @@ def process_all_questions(
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(
-        description="Extract activations from LLaVA-NeXT with multiple token windows"
+        description="Extract activations from LLaVA-NeXT with HuggingFace dataset"
     )
     
     parser.add_argument(
@@ -562,10 +726,17 @@ def main():
     )
     
     parser.add_argument(
-        '--data_folder',
+        '--hf_dataset',
         type=str,
-        required=True,
-        help='Path to filtered_data folder'
+        default='AHAAM/CIM',
+        help='HuggingFace dataset ID (e.g., AHAAM/CIM)'
+    )
+    
+    parser.add_argument(
+        '--hf_cache_dir',
+        type=str,
+        default='../inference/hf_cache/AHAAM__CIM/AHAAM__CIM',
+        help='Local cache directory for HF dataset'
     )
     
     parser.add_argument(
@@ -590,25 +761,58 @@ def main():
         help='Device to use'
     )
     
-    args = parser.parse_args()
+    # ← NEW: Debug log file
+    parser.add_argument(
+        '--debug_log',
+        type=str,
+        default='debug_log.txt',
+        help='Path to debug log file (default: debug_log.txt)'
+    )
     
-    if not os.path.exists(args.data_folder):
-        parser.error(f"Data folder not found: {args.data_folder}")
+    # ← NEW: Option to disable console output for debug
+    parser.add_argument(
+        '--no_console_debug',
+        action='store_true',
+        help='Disable debug output to console (only write to file)'
+    )
+    
+    args = parser.parse_args()
     
     device = None if args.device == 'auto' else args.device
     
-    print("Loading questions from filtered_data structure...")
-    questions_data = load_questions_from_filtered_data(args.data_folder)
+    # Create debug logger
+    debug_log_path = Path(args.output_dir) / args.debug_log
+    debug_log_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    logger = DebugLogger(
+        log_file=str(debug_log_path),
+        console=not args.no_console_debug
+    )
+    
+    print(f"Debug log will be saved to: {debug_log_path}")
+    
+    print("Loading questions from HuggingFace dataset...")
+    questions_data = load_questions_from_hf_dataset(args.hf_dataset, args.hf_cache_dir)
     print(f"Loaded {len(questions_data)} questions\n")
     
-    evaluator = LlavaNextEvaluator(model_id=args.model_id, device=device)
-    
-    process_all_questions(
-        evaluator=evaluator,
-        questions_data=questions_data,
-        output_dir=args.output_dir,
-        max_new_tokens=args.max_tokens
+    # Pass logger to evaluator
+    evaluator = LlavaNextEvaluator(
+        model_id=args.model_id, 
+        device=device, 
+        debug_logger=logger
     )
+    
+    try:
+        process_all_questions(
+            evaluator=evaluator,
+            questions_data=questions_data,
+            output_dir=args.output_dir,
+            max_new_tokens=args.max_tokens
+        )
+    finally:
+        # Ensure log file is closed
+        logger.close()
+        print(f"\nDebug log saved to: {debug_log_path}")
 
 
 if __name__ == "__main__":

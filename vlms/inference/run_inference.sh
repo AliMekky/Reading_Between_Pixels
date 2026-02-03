@@ -18,9 +18,9 @@ conda activate text_in_image
 cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/inference
 
 MODELS=(
-    "qwen-vl"
-    "llava-next"
-    "llava"
+    # "qwen-vl"
+    # "llava-next"
+    # "llava"
     "internvl"
 )
 

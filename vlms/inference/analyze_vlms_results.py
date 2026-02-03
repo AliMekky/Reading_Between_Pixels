@@ -1,30 +1,101 @@
 #!/usr/bin/env python3
 """
-Analyze VLM Inference Results
+Analyze VLM Inference Results - HuggingFace Dataset Version
 
 This script:
-1. Calculates accuracy for each result file
-2. Analyzes performance by category (Instance Attributes, Instances Counting, etc.)
-3. Analyzes performance by quality level (High, Medium, Low)
+1. Loads results and questions from HuggingFace dataset
+2. Calculates accuracy for each result file
+3. Analyzes performance by category
 4. Generates comparison tables and visualizations
 5. Creates summary reports
 
 Usage:
-    python analyze_vlm_results.py --results_dir ./results --questions_dir ./filtered_data --output ./analysis
+    python analyze_vlm_results.py --results_dir ./results --hf_dataset AHAAM/CIM --output ./analysis
 """
 
 import json
 import os
 import argparse
-from collections import defaultdict, Counter
+from collections import defaultdict
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
+from datasets import load_dataset, load_from_disk, DatasetDict
+from PIL import Image, ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Set visualization style
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (14, 8)
+
+def sanitize_repo_id(repo_id: str) -> str:
+    """Make a filesystem-safe name for caching."""
+    return repo_id.replace("/", "__").replace(" ", "_")
+
+def get_or_download_hf_dataset(
+    dataset_id: str, 
+    local_cache_root: str = "./hf_dataset_local_cache",
+    split: str = "test"
+):
+    """Download or load cached HF dataset."""
+    local_cache_root = Path(local_cache_root)
+    local_cache_root.mkdir(parents=True, exist_ok=True)
+    safe_name = sanitize_repo_id(dataset_id)
+    cache_dir = local_cache_root / safe_name
+
+    if cache_dir.exists():
+        print(f"✓ Loading dataset from cache: {cache_dir}")
+        return load_from_disk(str(cache_dir))
+
+    print(f"⬇️  Downloading '{dataset_id}'...")
+    ds = load_dataset(dataset_id, split=split)
+    
+    try:
+        ds.save_to_disk(str(cache_dir))
+        print(f"✓ Saved to cache: {cache_dir}")
+    except Exception as e:
+        print(f"⚠️  Cache save failed: {e}")
+    
+    return ds
+
+def load_hf_dataset_as_dict(hf_dataset):
+    """
+    Convert HF dataset to a dict keyed by question_id for fast lookup.
+    
+    Returns:
+        dict: {question_id: {question, choices, answer, category, etc.}}
+    """
+    questions_dict = {}
+    
+    if isinstance(hf_dataset, DatasetDict):
+        split_name = "test" if "test" in hf_dataset else list(hf_dataset.keys())[0]
+        dataset = hf_dataset[split_name]
+    else:
+        dataset = hf_dataset
+    
+    print(f"Loading {len(dataset)} questions from HF dataset...")
+    
+    for idx in range(len(dataset)):
+        try:
+            sample = dataset[idx]
+            question_id = sample.get("question_id") or sample.get("image_id") or f"q_{idx}"
+            
+            questions_dict[question_id] = {
+                'question_id': question_id,
+                'question': sample.get('question', ''),
+                'choices': sample.get('choices', []),
+                'answer': sample.get('answer', ''),
+                'category': sample.get('category', 'Unknown'),
+                'image_id': sample.get('image_id', ''),
+            }
+        except Exception as e:
+            print(f"⚠️  Error loading sample {idx}: {e}")
+            continue
+    
+    print(f"✓ Loaded {len(questions_dict)} questions")
+    return questions_dict
 
 def load_json(filepath):
     """Load JSON file"""
@@ -41,61 +112,50 @@ def parse_filename(filename):
     Expected format: {model}_{variant}_results.json
     Returns: (model, variant) or (None, None)
     """
-    if not filename.endswith('_results.json'):
-        return None, None
     
-    # Remove '_results.json'
-    base = filename.replace('_results.json', '')
     
-    # Split by last underscore to get variant
-    parts = base.rsplit('_', 1)
-    if len(parts) == 2:
-        return parts[0], parts[1]
+    parts = filename.split('_')
+    if len(parts) == 3:
+        return parts[0], parts[2].split('.')[0]
     
     return None, None
 
-def calculate_accuracy(results, questions_data):
+def calculate_accuracy(results, questions_dict):
     """
     Calculate accuracy by matching results with original questions
     
     Args:
-        results: List of result dicts with 'question_id' and 'predicted_answer'
-        questions_data: List of question dicts with 'question_id' and 'answer'
+        results: List of result dicts with 'image_id' and 'predicted_answer'
+        questions_dict: Dict of question data keyed by question_id
     
     Returns:
         dict with accuracy metrics
     """
-    # Create lookup dict for questions
-    questions_dict = {q['image']: q for q in questions_data}
-    
     total = 0
     correct = 0
     by_category = defaultdict(lambda: {'correct': 0, 'total': 0})
-    by_quality = defaultdict(lambda: {'correct': 0, 'total': 0})
     
     incorrect_samples = []
     
     for result in results:
-        qid = result.get('image')
+        # Try multiple possible ID fields
+        qid = result.get('image_id') or result.get('question_id') or result.get('image')
         predicted = result.get('predicted_answer', '').strip().upper()
         
         if qid not in questions_dict:
-            print(f"Warning: Question ID {qid} not found in questions data")
+            print(f"⚠️  Question ID {qid} not found in questions data")
             continue
         
         question = questions_dict[qid]
         ground_truth = question.get('answer', '').strip().upper()
         category = question.get('category', 'Unknown')
-        quality = question.get('quality', 'Unknown')
         
         total += 1
         by_category[category]['total'] += 1
-        by_quality[quality]['total'] += 1
         
         if predicted == ground_truth:
             correct += 1
             by_category[category]['correct'] += 1
-            by_quality[quality]['correct'] += 1
         else:
             incorrect_samples.append({
                 'question_id': qid,
@@ -103,8 +163,6 @@ def calculate_accuracy(results, questions_data):
                 'ground_truth': ground_truth,
                 'predicted': predicted,
                 'category': category,
-                'quality': quality,
-                'image': question.get('image', '')
             })
     
     # Calculate percentages
@@ -118,14 +176,6 @@ def calculate_accuracy(results, questions_data):
             'accuracy': (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
         }
     
-    quality_acc = {}
-    for qual, stats in by_quality.items():
-        quality_acc[qual] = {
-            'correct': stats['correct'],
-            'total': stats['total'],
-            'accuracy': (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
-        }
-    
     return {
         'overall': {
             'correct': correct,
@@ -133,19 +183,18 @@ def calculate_accuracy(results, questions_data):
             'accuracy': overall_acc
         },
         'by_category': category_acc,
-        'by_quality': quality_acc,
         'incorrect_samples': incorrect_samples[:20]  # Keep first 20 for analysis
     }
 
-def analyze_all_results(results_dir, questions_dir):
-    """Analyze all result files"""
+def analyze_all_results(results_dir, questions_dict):
+    """Analyze all result files using HF dataset questions"""
     
     all_analyses = {}
     
     # Get all result files
-    result_files = [f for f in os.listdir(results_dir) if f.endswith('_results.json')]
+    result_files = [f for f in os.listdir(results_dir) if f.endswith('.json')]
     
-    print(f"Found {len(result_files)} result files")
+    print(f"\nFound {len(result_files)} result files")
     print()
     
     for result_file in sorted(result_files):
@@ -153,6 +202,9 @@ def analyze_all_results(results_dir, questions_dir):
         
         # Parse filename
         model, variant = parse_filename(result_file)
+        if variant == 'summary':
+            continue
+        print(f"  Model: {model}, Variant: {variant}")
         if not model or not variant:
             print(f"  ⚠️  Could not parse filename: {result_file}")
             continue
@@ -164,16 +216,8 @@ def analyze_all_results(results_dir, questions_dir):
             print(f"  ❌ Failed to load results")
             continue
         
-        # Load corresponding questions
-        questions_file = f"filtered_questions_{variant}.json"
-        questions_path = os.path.join(questions_dir, questions_file)
-        questions = load_json(questions_path)
-        if not questions:
-            print(f"  ❌ Failed to load questions from {questions_file}")
-            continue
-        
         # Calculate accuracy
-        analysis = calculate_accuracy(results, questions)
+        analysis = calculate_accuracy(results, questions_dict)
         
         print(f"  ✅ Overall Accuracy: {analysis['overall']['accuracy']:.2f}% ({analysis['overall']['correct']}/{analysis['overall']['total']})")
         
@@ -218,382 +262,222 @@ def create_summary_tables(all_analyses):
     
     category_df = pd.DataFrame(category_data)
     
-    # Quality accuracy table
-    quality_data = []
-    for model, variants in all_analyses.items():
-        for variant, analysis in variants.items():
-            for quality, stats in analysis['by_quality'].items():
-                quality_data.append({
-                    'Model': model,
-                    'Variant': variant,
-                    'Quality': quality,
-                    'Accuracy (%)': round(stats['accuracy'], 2),
-                    'Correct': stats['correct'],
-                    'Total': stats['total']
-                })
-    
-    quality_df = pd.DataFrame(quality_data)
-    
-    return overall_df, category_df, quality_df
+    return overall_df, category_df
 
-def plot_overall_accuracy(overall_df, output_dir):
-    """Plot overall accuracy comparison"""
-    
-    # Pivot for grouped bar chart
-    pivot_df = overall_df.pivot(index='Model', columns='Variant', values='Accuracy (%)')
-    
-    plt.figure(figsize=(14, 6))
-    ax = pivot_df.plot(kind='bar', width=0.8)
-    plt.title('Overall Accuracy by Model and Variant', fontsize=16, fontweight='bold')
-    plt.xlabel('Model', fontsize=12, fontweight='bold')
-    plt.ylabel('Accuracy (%)', fontsize=12, fontweight='bold')
-    plt.legend(title='Variant', bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.xticks(rotation=45, ha='right')
-    plt.grid(axis='y', alpha=0.3)
-    plt.tight_layout()
-    
-    output_path = os.path.join(output_dir, 'overall_accuracy.png')
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {output_path}")
-
-def plot_category_accuracy(category_df, output_dir):
-    """Plot accuracy by category"""
-    
-    categories = category_df['Category'].unique()
-    
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    axes = axes.ravel()
-    
-    for idx, category in enumerate(sorted(categories)):
-        if idx >= len(axes):
-            break
-        
-        cat_data = category_df[category_df['Category'] == category]
-        pivot = cat_data.pivot(index='Model', columns='Variant', values='Accuracy (%)')
-        
-        pivot.plot(kind='bar', ax=axes[idx], width=0.8)
-        axes[idx].set_title(f'{category}', fontsize=12, fontweight='bold')
-        axes[idx].set_xlabel('Model', fontsize=10, fontweight='bold')
-        axes[idx].set_ylabel('Accuracy (%)', fontsize=10, fontweight='bold')
-        axes[idx].legend(title='Variant', fontsize=8)
-        axes[idx].tick_params(axis='x', rotation=45)
-        axes[idx].grid(axis='y', alpha=0.3)
-    
-    plt.suptitle('Accuracy by Category', fontsize=16, fontweight='bold', y=1.00)
-    plt.tight_layout()
-    
-    output_path = os.path.join(output_dir, 'category_accuracy.png')
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {output_path}")
-
-def plot_quality_accuracy(quality_df, output_dir):
-    """Plot accuracy by quality level"""
-    
-    plt.figure(figsize=(14, 6))
-    
-    # Create grouped bar chart
-    quality_order = ['High', 'Medium', 'Low']
-    models = quality_df['Model'].unique()
-    
-    for model in sorted(models):
-        model_data = quality_df[quality_df['Model'] == model]
-        
-        for variant in sorted(model_data['Variant'].unique()):
-            variant_data = model_data[model_data['Variant'] == variant]
-            
-            # Reorder by quality
-            variant_data = variant_data.set_index('Quality').reindex(quality_order).reset_index()
-            
-            label = f"{model}_{variant}"
-            plt.plot(variant_data['Quality'], variant_data['Accuracy (%)'], 
-                    marker='o', label=label, linewidth=2, markersize=8)
-    
-    plt.title('Accuracy by Quality Level', fontsize=16, fontweight='bold')
-    plt.xlabel('Quality Level', fontsize=12, fontweight='bold')
-    plt.ylabel('Accuracy (%)', fontsize=12, fontweight='bold')
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    output_path = os.path.join(output_dir, 'quality_accuracy.png')
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {output_path}")
-
-def plot_heatmap_comparison(overall_df, output_dir):
-    """Create heatmap of model vs variant accuracy"""
-    
-    pivot = overall_df.pivot(index='Model', columns='Variant', values='Accuracy (%)')
-    
-    plt.figure(figsize=(10, 6))
-    sns.heatmap(pivot, annot=True, fmt='.2f', cmap='RdYlGn', 
-                vmin=0, vmax=100, linewidths=0.5, cbar_kws={'label': 'Accuracy (%)'})
-    plt.title('Accuracy Heatmap: Model vs Variant', fontsize=16, fontweight='bold', pad=20)
-    plt.xlabel('Variant', fontsize=12, fontweight='bold')
-    plt.ylabel('Model', fontsize=12, fontweight='bold')
-    plt.tight_layout()
-    
-    output_path = os.path.join(output_dir, 'accuracy_heatmap.png')
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {output_path}")
-
-def plot_baseline_comparison(overall_df, output_dir):
+def plot_category_baseline_comparison(category_df, overall_df, output_dir):
     """
-    Create grouped barplot with no_text as baseline followed by all variants
-    All models shown together with horizontal lines extending from no_text bars
+    Create per-category plots with notext baseline AS A BAR
+    Shows difference from baseline inside bars with bar-width boxes
     """
+    categories = sorted(category_df['Category'].unique())
     
-    # Define variant order
-    variant_order = ['notext', 'correct', 'relevant', 'irrelevant', 'misleading']
-    
-    # Check if notext variant exists
-    if 'notext' not in overall_df['Variant'].values:
-        print("Warning: no_text variant not found, skipping baseline plot")
-        return
-    
-    # Filter to only include variants in our order
-    plot_df = overall_df[overall_df['Variant'].isin(variant_order)].copy()
-    
-    # Set categorical order
-    plot_df['Variant'] = pd.Categorical(plot_df['Variant'], 
-                                        categories=variant_order, 
-                                        ordered=True)
-    plot_df = plot_df.sort_values(['Variant', 'Model'])
-    
-    # Get models
-    models = sorted(plot_df['Model'].unique())
-    variants = variant_order
-    
-    # Set up the plot
-    fig, ax = plt.subplots(figsize=(16, 8))
-    
-    # Define colors for variants
+    # Define variant order and colors
+    variant_order = ['correct', 'irrelevant', 'notext', 'misleading']
     variant_colors = {
-        'no_text': '#3498db',      # Blue
-        'correct': '#2ecc71',      # Green
-        'relevant': '#f39c12',     # Orange
-        'irrelevant': '#e74c3c',   # Red
-        'misleading': '#9b59b6'    # Purple
+        'notext': '#95a5a6',       # Grey (baseline)
+        'correct': '#27ae60',      # Forest Green
+        'irrelevant': '#f39c12',   # Orange
+        'misleading': '#e74c3c'    # Red
     }
     
-    # Calculate bar positions
-    n_models = len(models)
-    n_variants = len(variants)
-    bar_width = 0.15
-    group_width = bar_width * n_models
-    group_gap = 0.3
+    # Determine grid size based on number of categories
+    n_categories = len(categories)
+    if n_categories <= 2:
+        n_rows, n_cols = 1, 2
+        figsize = (20, 8)
+    elif n_categories <= 4:
+        n_rows, n_cols = 2, 2
+        figsize = (20, 16)
+    else:
+        n_rows = (n_categories + 1) // 2
+        n_cols = 2
+        figsize = (20, 8 * n_rows)
     
-    # Calculate x positions for each group (variant)
-    group_positions = []
-    current_pos = 0
-    for i in range(n_variants):
-        group_positions.append(current_pos)
-        current_pos += group_width + group_gap
+    # Create subplots
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
     
-    # Plot bars for each model and store information
-    model_bars = {}
-    baseline_info = {}  # Store no_text bar position and accuracy for each model
+    # Flatten axes array for easier indexing
+    if n_categories == 1:
+        axes = [axes]
+    else:
+        axes = axes.ravel() if n_categories > 2 else axes
     
-    for model_idx, model in enumerate(models):
-        model_data = plot_df[plot_df['Model'] == model]
-        
-        x_positions = []
-        accuracies = []
-        colors = []
-        
-        for variant_idx, variant in enumerate(variants):
-            variant_data = model_data[model_data['Variant'] == variant]
+    for idx, category in enumerate(categories):
+        if idx >= len(axes):
+            break
             
-            if len(variant_data) > 0:
-                x_pos = group_positions[variant_idx] + (model_idx * bar_width)
-                acc = variant_data['Accuracy (%)'].values[0]
-                
-                x_positions.append(x_pos)
-                accuracies.append(acc)
-                colors.append(variant_colors.get(variant, '#95a5a6'))
-                
-                # Store baseline info
-                if variant == 'no_text':
-                    baseline_info[model] = {
-                        'x': x_pos,
-                        'accuracy': acc,
-                        'color': variant_colors['no_text']
-                    }
-            else:
-                # Variant doesn't exist for this model
-                x_pos = group_positions[variant_idx] + (model_idx * bar_width)
-                x_positions.append(x_pos)
-                accuracies.append(0)
-                colors.append('#cccccc')
+        ax = axes[idx]
         
-        bars = ax.bar(x_positions, accuracies, bar_width, 
-                     label=model, alpha=0.8, edgecolor='black', linewidth=1)
+        # Get data for this category
+        cat_data = category_df[category_df['Category'] == category].copy()
         
-        # Store bars for legend
-        model_bars[model] = bars[0]
+        # Filter to all variants including notext
+        cat_data = cat_data[cat_data['Variant'].isin(variant_order)]
         
-        # Add percentage labels on bars
-        for x, acc, bar in zip(x_positions, accuracies, bars):
-            if acc > 0:  # Only label if there's data
-                ax.text(x, acc + 1.5, f'{acc:.1f}%', 
-                       ha='center', va='bottom', fontsize=8, fontweight='bold')
-    
-    # Draw horizontal lines from no_text baseline extending across all variants
-    for model, info in baseline_info.items():
-        baseline_acc = info['accuracy']
-        baseline_x = info['x']
-        
-        # Get the x position of the last variant for this model
-        last_variant_x = group_positions[-1] + (models.index(model) * bar_width)
-        
-        # Draw horizontal dashed line from no_text bar to the end
-        # Use higher zorder to ensure it's on top of bars
-        ax.plot([baseline_x + bar_width, last_variant_x + bar_width], 
-               [baseline_acc, baseline_acc],
-               linestyle='--', linewidth=3, alpha=0.8,
-               color='black', zorder=100)  # Changed to black and higher zorder
-        
-        # Add label at the end of the line (right side)
-        ax.text(last_variant_x + bar_width + 0.1, baseline_acc, 
-               f'{info["accuracy"]:.1f}% ({model})',
-               ha='left', va='center', fontsize=8, fontweight='bold',
-               bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
-                        edgecolor='black', alpha=0.9, linewidth=1.5))
-    
-    # Set x-axis labels at group centers
-    group_centers = [pos + (group_width / 2) - (bar_width / 2) for pos in group_positions]
-    ax.set_xticks(group_centers)
-    ax.set_xticklabels(variants, fontsize=12, fontweight='bold')
-    
-    # Customize
-    ax.set_ylabel('Accuracy (%)', fontsize=14, fontweight='bold')
-    ax.set_title('All Models - Accuracy Comparison with No-Text Baseline\n(Horizontal dashed lines from no-text baseline)', 
-                fontsize=16, fontweight='bold', pad=20)
-    ax.set_ylim(0, 105)
-    ax.grid(axis='y', alpha=0.3, linestyle=':', linewidth=1)
-    ax.legend(title='Model', loc='upper right', fontsize=10, title_fontsize=11, framealpha=0.9)
-    
-    # Add variant color legend on the side
-    from matplotlib.patches import Patch
-    variant_patches = [Patch(facecolor=variant_colors[v], label=v, alpha=0.8) 
-                      for v in variants if v in variant_colors]
-    
-    # Create second legend for variants
-    ax2 = ax.twinx()
-    ax2.set_yticks([])
-    ax2.legend(handles=variant_patches, title='Variant Type', 
-              loc='upper left', fontsize=9, title_fontsize=10, framealpha=0.9)
-    
-    plt.tight_layout()
-    
-    output_path = os.path.join(output_dir, 'all_models_baseline_comparison.png')
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved: {output_path}")
-    
-    # Also create a version with difference from baseline annotated
-    fig, ax = plt.subplots(figsize=(16, 8))
-    
-    # Reset baseline_info
-    baseline_info = {}
-    
-    # Plot bars again
-    for model_idx, model in enumerate(models):
-        model_data = plot_df[plot_df['Model'] == model]
-        baseline_data = model_data[model_data['Variant'] == 'no_text']
-        
-        if len(baseline_data) == 0:
+        if len(cat_data) == 0:
+            ax.set_visible(False)
             continue
+        
+        # Set categorical order
+        cat_data['Variant'] = pd.Categorical(cat_data['Variant'], 
+                                            categories=variant_order, 
+                                            ordered=True)
+        cat_data = cat_data.sort_values(['Model', 'Variant'])
+        
+        models = sorted(cat_data['Model'].unique())
+        
+        # Calculate bar positions
+        n_models = len(models)
+        n_variants = len(variant_order)
+        bar_width = 0.5
+        group_gap = 0.5
+        
+        # x positions for each model group
+        model_positions = [i * (n_variants * bar_width + group_gap) for i in range(n_models)]
+        
+        # Plot bars for each model
+        for model_idx, model in enumerate(models):
+            model_data = cat_data[cat_data['Model'] == model]
+            base_x = model_positions[model_idx]
             
-        baseline_acc = baseline_data['Accuracy (%)'].values[0]
-        
-        x_positions = []
-        accuracies = []
-        colors = []
-        
-        for variant_idx, variant in enumerate(variants):
-            variant_data = model_data[model_data['Variant'] == variant]
+            # Get notext baseline value for this model
+            notext_data = model_data[model_data['Variant'] == 'notext']
+            notext_acc = notext_data['Accuracy (%)'].values[0] if len(notext_data) > 0 else None
             
-            if len(variant_data) > 0:
-                x_pos = group_positions[variant_idx] + (model_idx * bar_width)
-                acc = variant_data['Accuracy (%)'].values[0]
-                x_positions.append(x_pos)
-                accuracies.append(acc)
-                colors.append(variant_colors.get(variant, '#95a5a6'))
+            # Plot each variant
+            for variant_idx, variant in enumerate(variant_order):
+                variant_data = model_data[model_data['Variant'] == variant]
                 
-                if variant == 'no_text':
-                    baseline_info[model] = {
-                        'x': x_pos,
-                        'accuracy': acc,
-                        'color': variant_colors['no_text']
-                    }
-            else:
-                x_pos = group_positions[variant_idx] + (model_idx * bar_width)
-                x_positions.append(x_pos)
-                accuracies.append(0)
-                colors.append('#cccccc')
+                if len(variant_data) > 0:
+                    x_pos = base_x + (variant_idx * bar_width)
+                    acc = variant_data['Accuracy (%)'].values[0]
+                    
+                    # Plot bar
+                    bar = ax.bar(x_pos, acc, bar_width,
+                               color=variant_colors[variant],
+                               alpha=0.85,
+                               edgecolor='black',
+                               linewidth=1.5,
+                               zorder=3)
+                    
+                    # Add percentage label on top of bar
+                    ax.text(x_pos, acc + 2, f'{acc:.1f}%',
+                           ha='center', va='bottom',
+                           fontsize=11, fontweight='bold',
+                           zorder=6)
+                    
+                    # Add difference from baseline (if not baseline itself)
+                    if variant != 'notext' and notext_acc is not None:
+                        diff = acc - notext_acc
+                        
+                        # Choose symbol based on difference
+                        if diff > 0:
+                            symbol = '↑'
+                            diff_text = f'{symbol} {diff:.1f}%'
+                        elif diff < 0:
+                            symbol = '↓'
+                            diff_text = f'{symbol} {abs(diff):.1f}%'
+                        else:
+                            symbol = '='
+                            diff_text = f'{symbol} 0.0%'
+                        
+                        # Position based on bar height
+                        if acc > 30:
+                            # Inside bar, middle position
+                            y_pos = acc * 0.5
+                            text_color = 'white'
+                            bg_color = 'black'
+                            bg_alpha = 0.75
+                        elif acc > 15:
+                            # Inside bar, lower position
+                            y_pos = acc * 0.35
+                            text_color = 'white'
+                            bg_color = 'black'
+                            bg_alpha = 0.75
+                        else:
+                            # Very short bar - place just above x-axis
+                            y_pos = 7
+                            text_color = 'black'
+                            bg_color = 'white'
+                            bg_alpha = 0.95
+                        
+                        # Create a rectangle patch for the box (same width as bar)
+                        from matplotlib.patches import FancyBboxPatch
+                        
+                        # Calculate box dimensions
+                        box_height = 6  # Fixed height
+                        box_y = y_pos - box_height/2
+                        
+                        # Draw the box
+                        # bbox = FancyBboxPatch(
+                        #     (x_pos - bar_width/2, box_y),
+                        #     bar_width, box_height,
+                        #     boxstyle="round,pad=0.02",
+                        #     facecolor=bg_color,
+                        #     edgecolor='white' if text_color == 'white' else 'black',
+                        #     linewidth=1.5,
+                        #     alpha=bg_alpha,
+                        #     zorder=5
+                        # )
+                        # ax.add_patch(bbox)
+                        
+                        # Add the difference text
+                        ax.text(x_pos, y_pos, 
+                               diff_text,
+                               ha='center', va='center',
+                               fontsize=9, fontweight='bold',
+                               color=text_color,
+                               zorder=6)
         
-        bars = ax.bar(x_positions, accuracies, bar_width, 
-                     label=model, alpha=0.8, edgecolor='black', linewidth=1)
+        # Set x-axis labels (model names centered under each group)
+        model_centers = [pos + (n_variants * bar_width) / 2 - bar_width / 2 
+                        for pos in model_positions]
+        ax.set_xticks(model_centers)
+        ax.set_xticklabels(models, fontsize=13, fontweight='bold')
         
-        # Add percentage labels and difference from baseline
-        for idx, (x, acc, bar) in enumerate(zip(x_positions, accuracies, bars)):
-            if acc > 0:
-                # Add percentage on top
-                ax.text(x, acc + 1.5, f'{acc:.1f}%', 
-                       ha='center', va='bottom', fontsize=8, fontweight='bold')
-                
-                # Add difference for non-baseline variants
-                if idx > 0 and acc > 0:  # Skip no_text itself
-                    diff = acc - baseline_acc
-                    diff_color = '#2ecc71' if diff >= 0 else '#e74c3c'
-                    ax.text(x, acc/2, f'{diff:+.1f}%',
-                           ha='center', va='center', fontsize=7,
-                           fontweight='bold', color=diff_color,
-                           bbox=dict(boxstyle='round,pad=0.2', facecolor='white',
-                                   edgecolor=diff_color, alpha=0.9, linewidth=1.5))
+        # Labels and styling
+        ax.set_ylabel('Accuracy (%)', fontsize=14, fontweight='bold')
+        ax.set_title(category, fontsize=16, fontweight='bold', pad=20)
+        ax.set_ylim(0, 115)
+        
+        # Enhanced grid
+        ax.grid(axis='y', alpha=0.4, linestyle='--', linewidth=1, zorder=1)
+        ax.set_axisbelow(True)
+        
+        # Add legend (only on first subplot)
+        if idx == 0:
+            from matplotlib.patches import Patch
+            
+            legend_elements = [
+                Patch(facecolor=variant_colors['notext'], label='no-text (baseline)', 
+                     edgecolor='black', linewidth=1.5, alpha=0.85),
+                Patch(facecolor=variant_colors['correct'], label='correct', 
+                     edgecolor='black', linewidth=1.5, alpha=0.85),
+                Patch(facecolor=variant_colors['irrelevant'], label='irrelevant', 
+                     edgecolor='black', linewidth=1.5, alpha=0.85),
+                Patch(facecolor=variant_colors['misleading'], label='misleading', 
+                     edgecolor='black', linewidth=1.5, alpha=0.85),
+            ]
+            ax.legend(handles=legend_elements, loc='upper right', 
+                     fontsize=11, framealpha=0.95, edgecolor='black', 
+                     fancybox=True, shadow=True)
     
-    # Draw horizontal lines from no_text baseline
-    for model, info in baseline_info.items():
-        baseline_acc = info['accuracy']
-        baseline_x = info['x']
-        last_variant_x = group_positions[-1] + (models.index(model) * bar_width)
-        
-        # Draw horizontal dashed line from after no_text bar to the end
-        ax.plot([baseline_x + bar_width, last_variant_x + bar_width], 
-               [baseline_acc, baseline_acc],
-               linestyle='--', linewidth=3, alpha=0.8,
-               color='black', zorder=100)  # Changed to black and higher zorder
-        
-        # Add label at the end of the line
-        ax.text(last_variant_x + bar_width + 0.1, baseline_acc, 
-               f'{info["accuracy"]:.1f}% ({model})',
-               ha='left', va='center', fontsize=8, fontweight='bold',
-               bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
-                        edgecolor='black', alpha=0.9, linewidth=1.5))
+    # Hide unused subplots
+    for idx in range(len(categories), len(axes)):
+        axes[idx].set_visible(False)
     
-    group_centers = [pos + (group_width / 2) - (bar_width / 2) for pos in group_positions]
-    ax.set_xticks(group_centers)
-    ax.set_xticklabels(variants, fontsize=12, fontweight='bold')
-    
-    ax.set_ylabel('Accuracy (%)', fontsize=14, fontweight='bold')
-    ax.set_title('All Models - Accuracy with Differences from No-Text Baseline\n(Horizontal lines from baseline, boxes show % difference)', 
-                fontsize=16, fontweight='bold', pad=20)
-    ax.set_ylim(0, 105)
-    ax.grid(axis='y', alpha=0.3, linestyle=':', linewidth=1)
-    ax.legend(title='Model', loc='upper right', fontsize=10, title_fontsize=11, framealpha=0.9)
+    # Overall title
+    fig.suptitle('Accuracy by Category (with No-Text Baseline)', 
+                fontsize=18, fontweight='bold', y=0.995)
     
     plt.tight_layout()
     
-    output_path = os.path.join(output_dir, 'all_models_baseline_with_diff.png')
+    output_path = os.path.join(output_dir, 'category_baseline_comparison.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved: {output_path}")
 
-def generate_text_report(all_analyses, overall_df, category_df, quality_df, output_dir):
+def generate_text_report(all_analyses, overall_df, category_df, output_dir):
     """Generate comprehensive text report"""
     
     report_path = os.path.join(output_dir, 'analysis_report.txt')
@@ -646,51 +530,19 @@ def generate_text_report(all_analyses, overall_df, category_df, quality_df, outp
             f.write(cat_data.to_string(index=False))
             f.write("\n")
         
-        # Quality performance
-        f.write("\n" + "=" * 80 + "\n")
-        f.write("ACCURACY BY QUALITY LEVEL\n")
-        f.write("=" * 80 + "\n\n")
-        
-        for quality in ['High', 'Medium', 'Low']:
-            if quality in quality_df['Quality'].values:
-                f.write(f"\n{quality} Quality\n")
-                f.write("-" * 80 + "\n")
-                qual_data = quality_df[quality_df['Quality'] == quality][['Model', 'Variant', 'Accuracy (%)', 'Correct', 'Total']]
-                f.write(qual_data.to_string(index=False))
-                f.write("\n")
-        
-        # Key insights
-        f.write("\n" + "=" * 80 + "\n")
-        f.write("KEY INSIGHTS\n")
-        f.write("=" * 80 + "\n\n")
-        
-        # Variant comparison
-        f.write("1. VARIANT COMPARISON:\n")
-        for variant in ['correct', 'relevant', 'irrelevant', 'misleading']:
-            if variant in variant_avg.index:
-                f.write(f"   - {variant:12s}: {variant_avg[variant]:.2f}% average accuracy\n")
-        
-        f.write("\n2. CATEGORY INSIGHTS:\n")
-        cat_avg = category_df.groupby('Category')['Accuracy (%)'].mean().sort_values(ascending=False)
-        for cat, acc in cat_avg.items():
-            f.write(f"   - {cat:30s}: {acc:.2f}% average\n")
-        
-        f.write("\n3. QUALITY INSIGHTS:\n")
-        qual_avg = quality_df.groupby('Quality')['Accuracy (%)'].mean().sort_values(ascending=False)
-        for qual, acc in qual_avg.items():
-            f.write(f"   - {qual:10s} quality: {acc:.2f}% average\n")
-        
         f.write("\n" + "=" * 80 + "\n")
     
     print(f"Saved: {report_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Analyze VLM inference results')
+    parser = argparse.ArgumentParser(description='Analyze VLM inference results from HF dataset')
     parser.add_argument('--results_dir', '-r', default='./results',
                        help='Directory containing result JSON files')
-    parser.add_argument('--questions_dir', '-q', default='./filtered_data',
-                       help='Directory containing original question JSON files')
-    parser.add_argument('--output', '-o', default='./analysis',
+    parser.add_argument('--hf_dataset', default="AHAAM/CIM",
+                       help='HuggingFace dataset ID (e.g., AHAAM/CIM)')
+    parser.add_argument('--hf_cache_dir', default='./hf_cache/AHAAM__CIM/AHAAM__CIM',
+                       help='Local cache directory for HF dataset')
+    parser.add_argument('--output', '-o', default='./benchmarking',
                        help='Output directory for analysis results')
     
     args = parser.parse_args()
@@ -704,9 +556,14 @@ def main():
     print("=" * 80)
     print()
     
-    # Analyze all results
+    # Load HF dataset
+    print("📥 Loading HuggingFace dataset...")
+    hf_dataset = get_or_download_hf_dataset(args.hf_dataset, args.hf_cache_dir, split="test")
+    questions_dict = load_hf_dataset_as_dict(hf_dataset)
+    
+    print()
     print("📊 Analyzing results...")
-    all_analyses = analyze_all_results(args.results_dir, args.questions_dir)
+    all_analyses = analyze_all_results(args.results_dir, questions_dict)
     
     if not all_analyses:
         print("❌ No analyses completed")
@@ -714,27 +571,22 @@ def main():
     
     print()
     print("📈 Creating summary tables...")
-    overall_df, category_df, quality_df = create_summary_tables(all_analyses)
+    overall_df, category_df = create_summary_tables(all_analyses)
     
     # Save tables to CSV
     overall_df.to_csv(os.path.join(args.output, 'overall_accuracy.csv'), index=False)
     category_df.to_csv(os.path.join(args.output, 'category_accuracy.csv'), index=False)
-    quality_df.to_csv(os.path.join(args.output, 'quality_accuracy.csv'), index=False)
     print(f"✅ Saved CSV tables to {args.output}")
     
     print()
     print("📊 Generating visualizations...")
     plots_dir = os.path.join(args.output, 'plots')
     
-    plot_overall_accuracy(overall_df, plots_dir)
-    plot_category_accuracy(category_df, plots_dir)
-    plot_quality_accuracy(quality_df, plots_dir)
-    plot_heatmap_comparison(overall_df, plots_dir)
-    plot_baseline_comparison(overall_df, plots_dir)
+    plot_category_baseline_comparison(category_df, overall_df, plots_dir)
     
     print()
     print("📝 Generating text report...")
-    generate_text_report(all_analyses, overall_df, category_df, quality_df, args.output)
+    generate_text_report(all_analyses, overall_df, category_df, args.output)
     
     # Save detailed analysis as JSON
     analysis_json_path = os.path.join(args.output, 'detailed_analysis.json')
@@ -751,15 +603,12 @@ def main():
     print("📋 Generated files:")
     print("   - overall_accuracy.csv")
     print("   - category_accuracy.csv")
-    print("   - quality_accuracy.csv")
     print("   - analysis_report.txt")
     print("   - detailed_analysis.json")
     print("   - plots/overall_accuracy.png")
-    print("   - plots/category_accuracy.png")
-    print("   - plots/quality_accuracy.png")
+    print("   - plots/category_baseline_comparison.png")
     print("   - plots/accuracy_heatmap.png")
     print("   - plots/all_models_baseline_comparison.png")
-    print("   - plots/all_models_baseline_with_diff.png")
 
 if __name__ == "__main__":
     main()
