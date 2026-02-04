@@ -490,8 +490,8 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
         ## STEP 6: Define windows
         self._debug_print("\n### STEP 6: Defining Token Windows ###")
         
-        single_token_positions = [actual_seq_len - 1] if actual_seq_len > 0 else []
-        self._debug_print(f"single_token window: positions {single_token_positions}", level=1)
+        last_text_token_positions = [actual_seq_len - 1] if actual_seq_len > 0 else []
+        self._debug_print(f"last_text_token window: positions {last_text_token_positions}", level=1)
         
         vision_token_positions = vision_positions
         if len(vision_token_positions) > 10:
@@ -510,7 +510,7 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
         self._debug_print(f"all_tokens window: {len(all_token_positions)} positions [0...{actual_seq_len-1}]", level=1)
 
         windows: Dict[str, List[int]] = {
-            "single_token": single_token_positions,
+            "last_text_token": last_text_token_positions,
             "vision_tokens": vision_token_positions,
             "last_vision_token": last_vision_token_positions,
             "all_tokens": all_token_positions,
@@ -565,7 +565,7 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
             self._debug_print(f"  ✓ Window '{window_name}': {len(hidden_averaged_per_layer)} layers, {len(token_positions)} tokens averaged", level=2)
 
         # Default "main" representation
-        results["hidden_states"] = results["hidden_states_single_token"]
+        results["hidden_states"] = results["hidden_states_last_text_token"]
 
         self._debug_print("\n" + "="*80)
         self._debug_print("ACTIVATION EXTRACTION COMPLETE")
