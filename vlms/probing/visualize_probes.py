@@ -328,9 +328,9 @@ def generate_summary_statistics(data: Dict, output_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(description='Visualize probe results with layer-wise AUC scores')
-    parser.add_argument('--results', type=str, default="./probe_analysis_llava_next/all_results.json",
+    parser.add_argument('--results', type=str, default="./probe_analysis_qwen-vl/all_results.json",
                        help='Path to probe results JSON file')
-    parser.add_argument('--output-dir', type=str, default='./visualizations_llava_next',
+    parser.add_argument('--output-dir', type=str, default='./visualizations_qwen-vl',
                        help='Output directory for visualizations')
     parser.add_argument('--figsize', type=int, nargs=2, default=[12, 8],
                        help='Figure size (width height)')
