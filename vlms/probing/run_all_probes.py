@@ -29,12 +29,13 @@ warnings.filterwarnings('ignore')
 
 class Config:
     """Simple configuration."""
-    ACTIVATIONS_DIR = "../activations_analysis/llava_next_data_v2_activations_new_windows"
-    OUTPUT_DIR = "./probe_analysis_llava_next"
+    ACTIVATIONS_DIR = "../activations/activations_output/qwen-vl_activations"
+    OUTPUT_DIR = "./probe_analysis_qwen-vl"
 
-    WINDOWS = ['single_token', 'last_vision_token', 'all_tokens', 'decision_token']
+    WINDOWS = ['last_text_token', 'last_vision_token', 'all_tokens', 'decision_token']
 
-    NUM_LAYERS = 32 # Adjust based on model
+    NUM_LAYERS = 28 # Adjust based on model
+    ## 28 for Qwen-VL and 32 for llava-next
     CV_FOLDS = 5
     RANDOM_SEED = 42
 
@@ -326,12 +327,12 @@ def run_all_probes(data, config):
     # Run each probe type on each window
     # Run each probe type on appropriate windows
     for probe_type in ['detection', 'relevance', 'correctness', 'malicious']:
-        if probe_type == 'detection':
+        # if probe_type == 'detection':
             # Detection runs on all windows
-            windows_to_run = config.WINDOWS
-        else:
+        windows_to_run = config.WINDOWS
+        # else:
             # Other probes only on single_token
-            windows_to_run = ['single_token']
+            # windows_to_run = ['single_token']
         
         for window in windows_to_run:
             results = run_probe_analysis(data, probe_type, window, config)
