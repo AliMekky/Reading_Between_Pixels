@@ -347,6 +347,10 @@ class HFOcclusionAnalyzer:
                 arr[y0:y1, x0:x1, :] = mask_value
                 img_masked = Image.fromarray(arr)
 
+                if text_intersection_mask[gy, gx]:
+                    mask_dir = Path(".") / "masked_images_text_only"
+                    mask_dir.mkdir(exist_ok=True, parents=True)
+                    img_masked.save(mask_dir / f"mask_{gy:02d}_{gx:02d}.png")
                 # After: img_masked = Image.fromarray(arr)
                 # Add:
                 # img_masked.save(f"masked_images/mask_{gy}_{gx}.png")
@@ -406,8 +410,24 @@ class HFOcclusionAnalyzer:
                 
                 answer = sample.get("answer", "")
                 
-                # Get bounding box if available
-                bbox = sample.get("bbox", None)
+                # ← CHANGED: Get bounding box from text_overlays
+                variant_bboxes = {}
+                text_overlays = sample["text_overlays"]
+
+                for variant in ['correct', 'misleading', 'irrelevant']:
+                    if variant in text_overlays:
+                        bbox_xyxy = text_overlays[variant]["text_bbox_xyxy"]
+                        if bbox_xyxy is not None and len(bbox_xyxy) == 4:
+                            x1, y1, x2, y2 = bbox_xyxy
+                            variant_bboxes[variant] = {
+                                'x': float(x1),
+                                'y': float(y1),
+                                'width': float(x2 - x1),
+                                'height': float(y2 - y1)
+                            }
+
+                # For notext, set to None
+                variant_bboxes['notext'] = None
                 
                 image_variants = {}
                 for variant in variants:
@@ -422,15 +442,21 @@ class HFOcclusionAnalyzer:
                         'question': question,
                         'options': options,
                         'answer': answer,
-                        'bbox': bbox,
-                        'image_variants': image_variants
+                        'variant_bboxes': variant_bboxes,  # Now this will have actual values!
+                        'image_variants': image_variants,
+                        'text_overlays': text_overlays,  # ← Optional: save for reference
                     })
             
             except Exception as e:
                 print(f"⚠️  Error loading sample {idx}: {e}")
                 continue
         
-        print(f"✓ Loaded {len(questions_data)} questions with image variants\n")
+        print(f"✓ Loaded {len(questions_data)} questions with image variants")
+        
+        # ← ADD: Debug print to verify bboxes are loaded
+        # bboxes_found = sum(1 for q in questions_data if q['bbox'] is not None)
+        # print(f"✓ Found bboxes for {bboxes_found}/{len(questions_data)} questions\n")
+        
         return questions_data
 
     def categorize_pattern(self, variant_predictions: Dict[str, str], correct_answer: str) -> str:
@@ -470,7 +496,7 @@ class HFOcclusionAnalyzer:
         question = question_data['question']
         options = question_data['options']
         correct_answer = question_data['answer']
-        bbox = question_data.get('bbox', None)
+        variant_bboxes = question_data['variant_bboxes']  # ← Changed
         
         prompt = self._build_mcq_prompt(question, options)
         
@@ -479,10 +505,10 @@ class HFOcclusionAnalyzer:
             'question': question,
             'options': options,
             'correct_answer': correct_answer,
-            'bbox': bbox,
+            'variant_bboxes': variant_bboxes,  # ← NEW: per-variant bboxes
             'variants': {},
         }
-        
+                
         # First pass: get predictions for pattern categorization
         variant_predictions = {}
         for variant_name, image in question_data['image_variants'].items():
@@ -502,6 +528,8 @@ class HFOcclusionAnalyzer:
         for variant_name, image in question_data['image_variants'].items():
             print(f"  Processing {variant_name}...")
             
+            bbox = variant_bboxes.get(variant_name, None)  # ← Changed
+
             attribution_data = self.compute_occlusion_attribution(
                 image=image,
                 prompt=prompt,
@@ -535,7 +563,7 @@ class HFOcclusionAnalyzer:
             'question': results['question'],
             'options': results['options'],
             'correct_answer': results['correct_answer'],
-            'bbox': results['bbox'],
+            'variant_bboxes': results.get('variant_bboxes', {}),  # ← Save all bboxes
             'pattern': pattern,
             'variants': {},
         }
@@ -573,6 +601,8 @@ class HFOcclusionAnalyzer:
         grid_size: int = 16,
         exclude_edges: bool = True,
         max_samples: Optional[int] = None,
+        start: int = 0,
+        end: int = 1062,
     ):
         """Run complete occlusion analysis on HF dataset."""
         output_dir = Path(output_dir)
@@ -595,6 +625,10 @@ class HFOcclusionAnalyzer:
         
         for idx, question_data in enumerate(tqdm(questions_data, desc="Processing questions")):
             print(f"\n[{idx+1}/{len(questions_data)}] Question: {question_data['question_id']}")
+            if idx < start:
+                continue
+            if idx >= end:
+                break
             
             try:
                 results = self.process_single_question(
@@ -688,6 +722,19 @@ def main():
         default=None,
         help="Maximum number of samples to process (for testing)",
     )
+    parser.add_argument(
+        "--start",
+        type=int,
+        default=0,
+        help="Start processing from a specific index",
+    )
+    parser.add_argument(
+        "--end",
+        type=int,
+        default=1062,
+        help="End processing at a specific index",
+    )
+
     
     args = parser.parse_args()
     
@@ -704,6 +751,8 @@ def main():
         grid_size=args.grid_size,
         exclude_edges=not args.no_exclude_edges,
         max_samples=args.max_samples,
+        start = args.start,
+        end = args.end,
     )
 
 
