@@ -234,18 +234,17 @@ class HFOcclusionAnalyzer:
         self,
         bbox: Optional[Dict],
         image_size: Tuple[int, int],
-        grid_size: int = 16
+        grid_size: int = 16,
+        min_overlap_ratio: float = 0.1,  # ← NEW: minimum 30% overlap
     ) -> np.ndarray:
         """
-        Compute which grid patches intersect with the text bounding box.
+        Compute which grid patches intersect with text bbox.
         
         Args:
-            bbox: Dict with keys 'x', 'y', 'width', 'height' (or None)
-            image_size: (W, H) of image
-            grid_size: Number of patches per dimension
-            
-        Returns:
-            Boolean array (grid_size, grid_size) where True = intersects with text
+            min_overlap_ratio: Minimum fraction of bbox that must overlap (0.0-1.0)
+                            0.0 = any touch counts
+                            0.3 = at least 30% of bbox must be in patch
+                            1.0 = entire bbox must be in patch
         """
         W, H = image_size
         patch_w = W / grid_size
@@ -256,16 +255,15 @@ class HFOcclusionAnalyzer:
         if bbox is None:
             return intersection_mask
         
-        # Get bbox coordinates
         bbox_x = bbox.get('x', 0)
         bbox_y = bbox.get('y', 0)
         bbox_w = bbox.get('width', 0)
         bbox_h = bbox.get('height', 0)
+        bbox_area = bbox_w * bbox_h
         
         bbox_x2 = bbox_x + bbox_w
         bbox_y2 = bbox_y + bbox_h
         
-        # Check each patch
         for gy in range(grid_size):
             for gx in range(grid_size):
                 patch_x1 = gx * patch_w
@@ -273,10 +271,20 @@ class HFOcclusionAnalyzer:
                 patch_x2 = (gx + 1) * patch_w
                 patch_y2 = (gy + 1) * patch_h
                 
-                # Check intersection
-                if not (patch_x2 < bbox_x or patch_x1 > bbox_x2 or
-                        patch_y2 < bbox_y or patch_y1 > bbox_y2):
-                    intersection_mask[gy, gx] = True
+                # Calculate intersection area
+                overlap_x1 = max(bbox_x, patch_x1)
+                overlap_y1 = max(bbox_y, patch_y1)
+                overlap_x2 = min(bbox_x2, patch_x2)
+                overlap_y2 = min(bbox_y2, patch_y2)
+                
+                # Check if there's any overlap
+                if overlap_x1 < overlap_x2 and overlap_y1 < overlap_y2:
+                    # Calculate overlap area
+                    overlap_area = (overlap_x2 - overlap_x1) * (overlap_y2 - overlap_y1)
+                    overlap_ratio = overlap_area / (patch_w * patch_h)
+                    
+                    if overlap_ratio >= min_overlap_ratio:
+                        intersection_mask[gy, gx] = True
         
         return intersection_mask
 
