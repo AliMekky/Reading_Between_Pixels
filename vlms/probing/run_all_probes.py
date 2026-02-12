@@ -29,12 +29,12 @@ warnings.filterwarnings('ignore')
 
 class Config:
     """Simple configuration."""
-    ACTIVATIONS_DIR = "../activations/activations_output/qwen-vl_activations"
-    OUTPUT_DIR = "./probe_analysis_qwen-vl"
+    ACTIVATIONS_DIR = "../activations/activations_output/llava_activations"
+    OUTPUT_DIR = "./probe_analysis_llava"
 
     WINDOWS = ['last_text_token', 'last_vision_token', 'all_tokens', 'decision_token']
 
-    NUM_LAYERS = 28 # Adjust based on model
+    NUM_LAYERS = 32 # Adjust based on model
     ## 28 for Qwen-VL and 32 for llava-next
     CV_FOLDS = 5
     RANDOM_SEED = 42

@@ -351,6 +351,7 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
                 if len(variant_data) > 0:
                     x_pos = base_x + (variant_idx * bar_width)
                     acc = variant_data['Accuracy (%)'].values[0]
+
                     
                     # Plot bar
                     bar = ax.bar(x_pos, acc, bar_width,

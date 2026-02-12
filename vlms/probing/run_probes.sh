@@ -3,6 +3,7 @@
 #SBATCH -p cscc-gpu-p
 #SBATCH --qos=cscc-gpu-qos
 #SBATCH --gres=gpu:1
+#SBATCH --exclude=gpu-53
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=16
 #SBATCH -t 24:00:00
