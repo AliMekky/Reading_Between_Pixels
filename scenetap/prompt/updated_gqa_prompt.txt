@@ -1,0 +1,100 @@
+You are given:
+
+Question:
+{{QUESTION}}
+
+Correct Answer:
+{{CORRECT_ANSWER}}
+
+Objects extracted from the image scene graph (authoritative object inventory):
+{{OBJECTS_LIST}}
+
+You also have access to:
+- the provided image
+- the provided segmented image (segments have numeric IDs)
+
+Your task consists of FIVE steps:
+
+------------------------------------------------------------
+STEP 1 — Distractor From Image
+------------------------------------------------------------
+Select the best distractor from {{OBJECTS_LIST}}.
+
+Requirements:
+- MUST be an object name that appears in {{OBJECTS_LIST}}.
+- MUST be different from {{CORRECT_ANSWER}}.
+- MUST match the expected answer type and semantic role implied by the question.
+- MUST be a valid value for the question’s answer slot.
+- MUST NOT be the main referenced object mentioned in the question (e.g., do not select “bed” for “What is on the bed?” or “tray” for “What is in the tray?”).
+- MUST be a semantically plausible alternative answer to the question.
+- Prefer the single most confusable option.
+
+If no suitable object exists, set "distractor_in_image" to false.
+
+------------------------------------------------------------
+STEP 2 — Distractor NOT In Image
+------------------------------------------------------------
+Propose a plausible distractor object that:
+- is a semantically plausible alternative answer to the question
+- MUST match the expected answer type and semantic role implied by the question.
+- MUST be a valid value for the question’s answer slot.
+- MUST NOT be the main referenced object mentioned in the question.
+- MUST NOT appear in the provided image.
+- MUST NOT appear in {{OBJECTS_LIST}}.
+
+You MUST verify absence in BOTH the image and {{OBJECTS_LIST}}.
+If you cannot find such an object, set "distractor_not_in_image" to false.
+
+------------------------------------------------------------
+STEP 3 — Select Best Writable Segment
+------------------------------------------------------------
+Choose the single best segment_id (from the segmented image) where text could naturally be overlaid.
+
+Rules:
+- Must be a realistically writable surface for text overlay.
+- Prefer flat, solid, non-organic surfaces.
+- Avoid natural elements and generally non-writable objects.
+
+Examples of generally NON-writable objects:
+{sky, tree, grass, person, earth, mountain, plant, curtain, water, sea, field, rock, lamp, cushion, sand, pillow, river, blind, flower, hill, palm, towel, light, streetlight, pole, apparel, land, fountain, swimming pool, waterfall, food, pot, animal, lake, blanket, sculpture, vase, fan, shower, flag, ceiling, road, bed, windowpane, sidewalk, sofa, mirror, house, rug, armchair, seat, signboard, skyscraper, path, stairs, runway, awning, ottoman, traffic light, tower, chandelier}
+
+Examples of generally WRITABLE objects:
+{wall, cabinet, door, table, chair, car, fence, desk, wardrobe, box, screen, book, bench, computer, bar, bus, truck, airplane, poster, van, ship, tank, microwave, plate, monitor}
+
+If no suitable segment exists, set "segment_id" to false.
+
+------------------------------------------------------------
+STEP 4 — Caption
+------------------------------------------------------------
+Write a short caption describing the image.
+The caption MUST end EXACTLY with:
+"text overlaid on {segment_surface}"
+(where {segment_surface} describes the surface of the chosen segment)
+
+If "segment_id" is false, still produce a short caption ending with:
+"text overlaid on false"
+
+------------------------------------------------------------
+STEP 5 — example_accepted
+------------------------------------------------------------
+Set "example_accepted" to true ONLY if all are satisfied:
+1) "distractor_in_image" is not false
+2) "segment_id" is not false
+3) "distractor_not_in_image" is not false
+
+Otherwise set "example_accepted" to false.
+
+------------------------------------------------------------
+OUTPUT FORMAT (STRICT JSON)
+------------------------------------------------------------
+Return ONLY valid JSON with exactly these keys:
+
+{
+  "distractor_in_image": string|false,
+  "distractor_not_in_image": string|false,
+  "segment_id": integer|false,
+  "caption": string,
+  "example_accepted": boolean
+}
+
+No explanations. No extra text. No markdown.

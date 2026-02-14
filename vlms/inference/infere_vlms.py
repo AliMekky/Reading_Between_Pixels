@@ -508,7 +508,7 @@ class QwenVLEvaluator(BaseVLMEvaluator):
 class LlavaNextEvaluator(BaseVLMEvaluator):
     """LLaVA-NeXT (v1.6) evaluator implementation."""
     
-    def __init__(self, model_id: str, device: str = None):
+    def __init__(self, model_id: str, device: str = 'cuda'):
         if not LLAVA_NEXT_AVAILABLE:
             raise ImportError("LLaVA-NeXT requires: pip install -U transformers")
         super().__init__(model_id, device)
@@ -553,7 +553,7 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
 class InternVLEvaluator(BaseVLMEvaluator):
     """InternVL3.5 evaluator implementation."""
     
-    def __init__(self, model_id: str, device: str = None):
+    def __init__(self, model_id: str, device: str = 'cuda'):
         if not INTERNVL_AVAILABLE:
             raise ImportError("InternVL requires: pip install torchvision einops timm")
         super().__init__(model_id, device)
@@ -747,7 +747,7 @@ else:
     }
 
 
-def get_evaluator(model_type: str, model_id: str = None, device: str = None) -> BaseVLMEvaluator:
+def get_evaluator(model_type: str, model_id: str = None, device: str = 'cuda') -> BaseVLMEvaluator:
     """Factory function to get the appropriate evaluator."""
     if model_type not in MODEL_REGISTRY:
         available = [k for k, v in MODEL_REGISTRY.items() if v.get('available', False)]
@@ -777,7 +777,7 @@ def main():
     parser.add_argument('--output', type=str, default='results.json')
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--max_tokens', type=int, default=50)
-    parser.add_argument('--device', type=str, choices=['cuda','cpu','auto'], default='auto')
+    parser.add_argument('--device', type=str, choices=['cuda','cpu','auto'], default='cuda')
     parser.add_argument('--list_models', action='store_true')
 
     args = parser.parse_args()

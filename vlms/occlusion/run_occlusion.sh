@@ -3,6 +3,7 @@
 #SBATCH -p cscc-gpu-p
 #SBATCH --qos=cscc-gpu-qos
 #SBATCH --gres=gpu:1
+#SBATCH --exclude=gpu-53
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=16
 #SBATCH -t 24:00:00
@@ -31,9 +32,23 @@ echo "----------------------------------------"
 
 START_TIME=$(date +%s)
 
-python -u updated_occlusions.py \
+
+python -u updated_occlusion.py \
     --output_dir "$output_dir" \
     --model_type "$model" \
+    --start 900 \
+    --end 975 \
+    > logs/occ_900_975.log 2>&1 &
+
+python -u updated_occlusion.py \
+    --output_dir "$output_dir" \
+    --model_type "$model" \
+    --start 975 \
+    --end 1063 \
+    > logs/occ_975_1063.log 2>&1 &
+
+
+wait
 
 EXIT_CODE=$?
 END_TIME=$(date +%s)

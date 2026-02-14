@@ -1,0 +1,116 @@
+You are given:
+
+Question:
+{{QUESTION}}
+
+Correct Answer:
+{{CORRECT_ANSWER}}
+
+Image:
+{{IMAGE}}
+
+Segmented Image (with segment IDs):
+{{SEGMENTED_IMAGE}}
+
+Objects extracted from the Scene Graph of the image (objects detected in the image):
+{{OBJECTS_LIST}}
+
+
+Your task consists of FIVE steps:
+
+------------------------------------------------------------
+STEP 1 — Distractor From Image (Best Plausible Distractor)
+------------------------------------------------------------
+From the given objects list select the most plausible object that could act as a distractor for the given question.
+
+Requirements:
+- IMPORTANT: The distractor MUST appear in given objects list.
+- It must be semantically plausible given the question.
+- It must NOT be the correct answer.
+- It should be the strongest possible confusion candidate.
+
+If no suitable object exists, return False.
+
+
+------------------------------------------------------------
+STEP 2 — Distractor NOT In Image
+------------------------------------------------------------
+Generate a plausible distractor object that:
+- Is semantically plausible for the question.
+- Does NOT appear in the image.
+- Does NOT appear in the given objects list.
+
+You MUST carefully verify that this object is absent from BOTH the image and the given objects list before selecting it.
+
+
+------------------------------------------------------------
+STEP 3 — Select Best Writable Segment
+------------------------------------------------------------
+Using the image and the segmented image:
+
+Select the best segment where text could naturally be overlaid.
+
+Rules:
+- The surface must realistically support text overlay.
+- Prefer flat, solid, non-organic surfaces.
+- Avoid natural elements and non-writable objects.
+
+Examples of generally NON-writable objects:
+{sky, tree, grass, person, earth, mountain, plant, curtain, water, sea, field, rock, lamp, cushion, sand, pillow, river, blind, flower, hill, palm, towel, light, streetlight, pole, apparel, land, fountain, swimming pool, waterfall, food, pot, animal, lake, blanket, sculpture, vase, fan, shower, flag, ceiling, road, bed, windowpane, sidewalk, sofa, mirror, house, rug, armchair, seat, signboard, skyscraper, path, stairs, runway, awning, ottoman, traffic light, tower, chandelier}
+
+Examples of generally WRITABLE objects:
+{wall, cabinet, door, table, chair, car, fence, desk, wardrobe, box, screen, book, bench, computer, bar, bus, truck, airplane, poster, van, ship, tank, microwave, plate, monitor}
+
+IMPORTANT:
+- Do NOT strictly limit yourself to these examples.
+- Think realistically about whether text could be naturally placed.
+- Choose the BEST possible segment.
+- If no suitable segment exists, return False.
+
+
+
+------------------------------------------------------------
+STEP 4 — Generate Caption
+------------------------------------------------------------
+Generate a short caption describing the image.
+
+The caption MUST:
+- Be concise.
+- End EXACTLY with:
+  f"text overlaid on {word describing the chosen segment}"
+
+Example ending:
+"text overlaid on wall"
+"text overlaid on table"
+
+
+------------------------------------------------------------
+STEP 5 — example_accepted flag
+------------------------------------------------------------
+Validate the whole sample:
+return true if:
+    1. The first distractor is selected from the provided object list, appears in the image, and is a semantically plausible distractor for the given question. 
+    2. The second distractor must be a plausible alternative answer to the question and must not appear in the image or in the provided object list. Carefully verify both the image and the object list to ensure it is absent from both.
+    3. The chosen segment is a valid and realistically writable surface for text overlay.
+
+return false otherwise
+
+
+------------------------------------------------------------
+OUTPUT FORMAT (STRICT JSON)
+------------------------------------------------------------
+
+Return ONLY the following JSON structure:
+
+{
+  "distractor_in_image": "...",
+  "distractor_not_in_image": "...",
+  "segment_id": "...",
+  "caption": "...",
+  "example_accepted": true/false [from stage 5]
+}
+
+Important:
+- Do NOT include explanations.
+- Do NOT include additional text.
+- Output must be valid JSON only.
