@@ -1,0 +1,35 @@
+You are given:
+
+Image
+Question:
+{{QUESTION}}
+
+Correct Answer:
+{{CORRECT_ANSWER}}
+
+Misleading Groundable:
+{{MISLEADING_GROUNDABLE}}
+
+Misleading Ungroundable:
+{{MISLEADING_UNGROUNDABLE}}
+
+Your task is to validate this multiple-choice example.
+
+Validation criteria:
+
+1) correct_answer:
+   - Must correctly answer the question based on the image.
+
+2) misleading_groundable:
+   - Must be wrong given the question and the image.
+   - Must appear in the image.
+
+3) misleading_ungroundable:
+   - Must be wrong given the question and the image.
+   - Must NOT appear in the image.
+
+If all conditions are satisfied → accept.
+Otherwise → reject.
+
+Return exactly ONE short sentence explaining why.
+End with "true" if accepted or "false" if rejected.

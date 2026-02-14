@@ -56,7 +56,7 @@ def download_output_file(client, batch, output_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Submit and monitor OpenAI Batch job")
-    parser.add_argument("--input", default = './batches_out/batch_file_4000_4500.jsonl', help="Path to your batch JSONL input file")
+    parser.add_argument("--input", default = './batches_files_validation/batch_file_validation_3000_4000.jsonl', help="Path to your batch JSONL input file")
     parser.add_argument("--output", required=False, default="batch_output.jsonl", help="Output file to save results")
     parser.add_argument("--interval", type=int, default=15, help="Polling interval in seconds")
     parser.add_argument("--description", type=str, default="generate plausible answers for the given questions", help="Batch job description")
