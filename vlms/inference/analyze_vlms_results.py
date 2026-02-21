@@ -82,13 +82,19 @@ def load_hf_dataset_as_dict(hf_dataset):
             sample = dataset[idx]
             question_id = sample.get("question_id") or sample.get("image_id") or f"q_{idx}"
             
+            # questions_dict[question_id] = {
+            #     'question_id': question_id,
+            #     'question': sample.get('question', ''),
+            #     'choices': sample.get('choices', []),
+            #     'answer': sample.get('answer', ''),
+            #     'category': sample.get('category', 'Unknown'),
+            #     'image_id': sample.get('image_id', ''),
+            # }
             questions_dict[question_id] = {
-                'question_id': question_id,
-                'question': sample.get('question', ''),
-                'choices': sample.get('choices', []),
-                'answer': sample.get('answer', ''),
-                'category': sample.get('category', 'Unknown'),
-                'image_id': sample.get('image_id', ''),
+                "question_id": question_id,
+                "question": sample.get("question", ""),
+                "caption": sample.get("caption", ""),
+                "image_id": sample.get("image_id", ""),
             }
         except Exception as e:
             print(f"⚠️  Error loading sample {idx}: {e}")
@@ -108,15 +114,20 @@ def load_json(filepath):
 
 def parse_filename(filename):
     """
-    Parse result filename to extract model and variant
-    Expected format: {model}_{variant}_results.json
-    Returns: (model, variant) or (None, None)
+    Expected format:
+        {model}_results_<variant>.json
+
+    Example:
+        llava_results_correct_answer.json
+        qwen_results_misleading_groundable.json
     """
+    stem = filename.replace(".json", "")
+    parts = stem.split("_results_")
     
-    
-    parts = filename.split('_')
-    if len(parts) == 3:
-        return parts[0], parts[2].split('.')[0]
+    if len(parts) == 2:
+        model = parts[0]
+        variant = parts[1]
+        return model, variant
     
     return None, None
 
@@ -146,9 +157,11 @@ def calculate_accuracy(results, questions_dict):
             print(f"⚠️  Question ID {qid} not found in questions data")
             continue
         
-        question = questions_dict[qid]
-        ground_truth = question.get('answer', '').strip().upper()
-        category = question.get('category', 'Unknown')
+        question = questions_dict.get(qid, {})
+        ground_truth = (result.get("correct_answer") or "").strip().upper()
+
+        # GUIC doesn't have category; keep one bucket
+        category = "GUIC"
         
         total += 1
         by_category[category]['total'] += 1
@@ -272,19 +285,26 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
     categories = sorted(category_df['Category'].unique())
     
     # Define variant order and colors
-    variant_order = ['correct', 'irrelevant', 'notext', 'misleading']
+    variant_order = [
+        "notext",
+        "correct_answer",
+        "misleading_groundable",
+        "misleading_ungroundable",
+        "irrelevant_word",
+    ]
+
     variant_colors = {
-        'notext': '#95a5a6',       # Grey (baseline)
-        'correct': '#27ae60',      # Forest Green
-        'irrelevant': '#f39c12',   # Orange
-        'misleading': '#e74c3c'    # Red
+        "notext": "#95a5a6",                 # grey baseline
+        "correct_answer": "#27ae60",         # green (correct)
+        "misleading_groundable": "#e74c3c",  # red (grounded misleading)
+        "misleading_ungroundable": "#8e44ad",# purple (ungrounded misleading)
+        "irrelevant_word": "#f39c12",        # orange (irrelevant)
     }
-    
     # Determine grid size based on number of categories
     n_categories = len(categories)
     if n_categories <= 2:
         n_rows, n_cols = 1, 2
-        figsize = (20, 8)
+        figsize = (20, 9)
     elif n_categories <= 4:
         n_rows, n_cols = 2, 2
         figsize = (20, 16)
@@ -296,11 +316,13 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
     # Create subplots
     fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
     
-    # Flatten axes array for easier indexing
-    if n_categories == 1:
-        axes = [axes]
+
+    # Always flatten safely so each element is a matplotlib Axes
+    import numpy as np
+    if isinstance(axes, np.ndarray):
+        axes = axes.flatten()
     else:
-        axes = axes.ravel() if n_categories > 2 else axes
+        axes = [axes]
     
     for idx, category in enumerate(categories):
         if idx >= len(axes):
@@ -352,7 +374,8 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
                     x_pos = base_x + (variant_idx * bar_width)
                     acc = variant_data['Accuracy (%)'].values[0]
 
-                    
+                    if variant not in variant_colors:
+                        continue
                     # Plot bar
                     bar = ax.bar(x_pos, acc, bar_width,
                                color=variant_colors[variant],
@@ -438,7 +461,7 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
         
         # Labels and styling
         ax.set_ylabel('Accuracy (%)', fontsize=14, fontweight='bold')
-        ax.set_title(category, fontsize=16, fontweight='bold', pad=20)
+        # ax.set_title(category, fontsize=16, fontweight='bold', pad=20)
         ax.set_ylim(0, 115)
         
         # Enhanced grid
@@ -448,28 +471,31 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
         # Add legend (only on first subplot)
         if idx == 0:
             from matplotlib.patches import Patch
-            
+
             legend_elements = [
-                Patch(facecolor=variant_colors['notext'], label='no-text (baseline)', 
-                     edgecolor='black', linewidth=1.5, alpha=0.85),
-                Patch(facecolor=variant_colors['correct'], label='correct', 
-                     edgecolor='black', linewidth=1.5, alpha=0.85),
-                Patch(facecolor=variant_colors['irrelevant'], label='irrelevant', 
-                     edgecolor='black', linewidth=1.5, alpha=0.85),
-                Patch(facecolor=variant_colors['misleading'], label='misleading', 
-                     edgecolor='black', linewidth=1.5, alpha=0.85),
+                Patch(facecolor=variant_colors["notext"], label="no-text (baseline)",
+                      edgecolor="black", linewidth=1.5, alpha=0.85),
+                Patch(facecolor=variant_colors["correct_answer"], label="correct answer",
+                      edgecolor="black", linewidth=1.5, alpha=0.85),
+                Patch(facecolor=variant_colors["misleading_groundable"], label="misleading (groundable)",
+                      edgecolor="black", linewidth=1.5, alpha=0.85),
+                Patch(facecolor=variant_colors["misleading_ungroundable"], label="misleading (ungroundable)",
+                      edgecolor="black", linewidth=1.5, alpha=0.85),
+                Patch(facecolor=variant_colors["irrelevant_word"], label="irrelevant word",
+                      edgecolor="black", linewidth=1.5, alpha=0.85),
             ]
-            ax.legend(handles=legend_elements, loc='upper right', 
-                     fontsize=11, framealpha=0.95, edgecolor='black', 
-                     fancybox=True, shadow=True)
+
+            ax.legend(handles=legend_elements, loc="upper right",
+                      fontsize=11, framealpha=0.95, edgecolor="black",
+                      fancybox=True, shadow=True)
     
     # Hide unused subplots
     for idx in range(len(categories), len(axes)):
         axes[idx].set_visible(False)
     
-    # Overall title
-    fig.suptitle('Accuracy by Category (with No-Text Baseline)', 
-                fontsize=18, fontweight='bold', y=0.995)
+    # # Overall title
+    # fig.suptitle('Accuracy by Category (with No-Text Baseline)', 
+    #             fontsize=18, fontweight='bold', y=0.995)
     
     plt.tight_layout()
     
@@ -537,13 +563,13 @@ def generate_text_report(all_analyses, overall_df, category_df, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description='Analyze VLM inference results from HF dataset')
-    parser.add_argument('--results_dir', '-r', default='./results',
+    parser.add_argument('--results_dir', '-r', default='./results_GUIC',
                        help='Directory containing result JSON files')
-    parser.add_argument('--hf_dataset', default="AHAAM/CIM",
+    parser.add_argument('--hf_dataset', default="AHAAM/GUIC",
                        help='HuggingFace dataset ID (e.g., AHAAM/CIM)')
-    parser.add_argument('--hf_cache_dir', default='./hf_cache/AHAAM__CIM/AHAAM__CIM',
+    parser.add_argument('--hf_cache_dir', default='./hf_cache_GUIC/',
                        help='Local cache directory for HF dataset')
-    parser.add_argument('--output', '-o', default='./benchmarking',
+    parser.add_argument('--output', '-o', default='./benchmarking_GUIC',
                        help='Output directory for analysis results')
     
     args = parser.parse_args()

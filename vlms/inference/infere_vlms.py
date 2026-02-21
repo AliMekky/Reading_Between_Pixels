@@ -13,9 +13,8 @@ from PIL import Image, ImageFile
 from transformers import AutoProcessor
 from tqdm import tqdm
 from abc import ABC, abstractmethod
-from datasets import load_dataset, load_from_disk, DatasetDict
-ImageFile.LOAD_TRUNCATED_IMAGES = True
-
+from datasets import load_dataset, load_from_disk, DatasetDict, Dataset
+import random
 # Conditional imports for different models
 try:
     from transformers import LlavaForConditionalGeneration
@@ -58,7 +57,7 @@ def get_or_download_hf_dataset(
     dataset_id: str, 
     local_cache_root: str = "./hf_dataset_local_cache",
     split: str = "test"
-) -> DatasetDict:
+) -> Dataset:
     """Download or load cached HF dataset."""
     local_cache_root = Path(local_cache_root)
     local_cache_root.mkdir(parents=True, exist_ok=True)
@@ -81,63 +80,88 @@ def get_or_download_hf_dataset(
     return ds
 
 
-def build_questions_from_hf_dataset(ds, variant: str = "notext") -> List[Dict]:
+def build_questions_from_hf_dataset(
+    ds,
+    variant: str = "notext",
+    shuffle_options: bool = True,
+    seed: int = 0,
+) -> List[Dict]:
     """
-    Convert a loaded HF dataset into a questions_data list similar to previously expected JSON.
-    Each item will contain:
-      - 'image_path' : local path string to the chosen variant image (sample[variant]['path'] or sample[variant])
-      - 'question'   : question string
-      - 'options'    : dict {'A':..., 'B':..., 'C':..., 'D':...}
-      - 'answer'     : ground-truth label (if present)
-      - preserve other metadata if present
+    GUIC version with per-question randomized option order.
+
+    Options are drawn from the 4 variant texts:
+      - correct_answer.text
+      - misleading_groundable.text
+      - misleading_ungroundable.text
+      - irrelevant_word.text
+
+    We shuffle those 4 options per sample and compute the correct answer letter
+    based on where `correct_answer` ended up.
     """
     items = []
-    # If user passed a DatasetDict, pick 'test' or the first split
+
+    # If user passed a DatasetDict, pick 'test' or first split
     if isinstance(ds, DatasetDict):
-        # prefer 'test' split if present
         split_name = "test" if "test" in ds else list(ds.keys())[0]
         dataset = ds[split_name]
     else:
         dataset = ds
 
-    # ← CHANGE THIS LINE FROM:
-    # for sample in dataset:
-    # ← TO:
+    labels = ["A", "B", "C", "D"]
+
     for idx in tqdm(range(len(dataset)), desc=f"Loading {variant} variant"):
         try:
-            sample = dataset[idx]  # ← Access by index instead of iteration
-            
-            # get question
-            question = sample.get("question") or sample.get("question_text") or ""
-            choices_list = sample.get("choices") or sample.get("options") or []
-            # build options dict A-D
-            options = {}
-            labels = ["A", "B", "C", "D"]
-            for i, lbl in enumerate(labels):
-                options[lbl] = choices_list[i] if i < len(choices_list) else ""
+            sample = dataset[idx]
+            qid = sample.get("question_id", f"unknown_{idx}")
+            question = sample.get("question", "")
 
-            # correct answer label in dataset
-            ans = sample.get("answer") or sample.get("correct_answer") or sample.get("label") or None
+            # 1) Collect candidates with stable IDs
+            candidates = [
+                {"key": "correct_answer", "text": sample["correct_answer"]["text"]},
+                {"key": "misleading_groundable", "text": sample["misleading_groundable"]["text"]},
+                {"key": "misleading_ungroundable", "text": sample["misleading_ungroundable"]["text"]},
+                {"key": "irrelevant_word", "text": sample["irrelevant_word"]["text"]},
+            ]
 
-            # choose image path from variant
-            img_obj = sample.get(variant)
-            if img_obj is None:
-                print(f"Warning: sample {idx} missing '{variant}' image, skipping. sample id: {sample.get('question_id')}")
-                continue
+            # 2) Shuffle per-sample, deterministically (qid-based) if desired
+            if shuffle_options:
+                rng = random.Random(f"{seed}_{qid}")  # deterministic across runs
+                rng.shuffle(candidates)
+
+            # 3) Build options dict + find correct letter
+            options = {labels[i]: cand["text"] for i, cand in enumerate(candidates)}
+            correct_index = next(i for i, cand in enumerate(candidates) if cand["key"] == "correct_answer")
+            ans = labels[correct_index]
+
+            # 4) Choose image input for requested variant
+            if variant == "notext":
+                img_obj = sample["notext"]["image"]
+            else:
+                if variant not in sample:
+                    print(f"Warning: sample {idx} missing '{variant}', skipping. qid={qid}")
+                    continue
+                img_obj = sample[variant]["image"]
+
+            # 5) (Optional but recommended) store mapping for auditing
+            option_meta = {
+                "order": [cand["key"] for cand in candidates],  # e.g. ["irrelevant_word","correct_answer",...]
+                "label_to_key": {labels[i]: cand["key"] for i, cand in enumerate(candidates)},
+            }
 
             items.append({
-                "image_id": sample.get("question_id", "unknown"),
-                "image_input": img_obj, 
+                "image_id": qid,
+                "image_input": img_obj,
                 "question": question,
                 "options": options,
-                "answer": ans,
-                "raw_sample": sample
+                "answer": ans,                 # <-- correct letter after shuffling
+                "option_meta": option_meta,    # <-- save permutation/mapping
+                "raw_sample": sample,
             })
-        
+
         except Exception as e:
             print(f"⚠️  Error loading sample {idx}: {e}")
             continue
-    
+
     print(f"✓ Loaded {len(items)}/{len(dataset)} samples for variant '{variant}'")
     return items
 
@@ -773,7 +797,7 @@ def main():
     parser.add_argument('--model_type', type=str, default='llava')
     parser.add_argument('--model_id', type=str)
     parser.add_argument('--hf_dataset', type=str, required=True, help='HF dataset ID (e.g., AHAAM/CIM)')
-    parser.add_argument('--hf_cache_dir', type=str, default='./hf_dataset_local_cache')
+    parser.add_argument('--hf_cache_dir', type=str, default='./hf_dataset_GUIC')
     parser.add_argument('--output', type=str, default='results.json')
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--max_tokens', type=int, default=50)
@@ -796,13 +820,20 @@ def main():
     ds = get_or_download_hf_dataset(args.hf_dataset, local_cache_root=args.hf_cache_dir, split="test")
 
     # Evaluate all 4 variants
-    variants = ['notext', 'correct', 'irrelevant', 'misleading']
+    variants = [
+    "notext",
+    "correct_answer",
+    "misleading_groundable",
+    "misleading_ungroundable",
+    "irrelevant_word",
+    ]
+
     summary = []
 
     for variant in variants:
         print(f"\n{'='*60}\nEvaluating variant: {variant}\n{'='*60}")
         
-        questions_list = build_questions_from_hf_dataset(ds, variant=variant)
+        questions_list = build_questions_from_hf_dataset(ds, variant=variant, shuffle_options=True, seed=42)
         variant_output = safe_suffix(args.output, variant)
         
         results = evaluate_from_questions_list(
