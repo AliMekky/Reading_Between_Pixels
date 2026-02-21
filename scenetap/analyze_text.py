@@ -17,6 +17,8 @@ from utils.utils import is_correct_answer
 from tqdm import tqdm
 
 
+
+
 class TypoDataset(Dataset):
     def __init__(self, question_path):
         # Question file
@@ -42,10 +44,10 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="gpt-4o", help="Model name: gpt-4o")
     parser.add_argument("--dataset", type=str, default="typo_base_complex",
                         help="Dataset name: typo_base_complex, typo_base_color, vqav2_val2014")
-    parser.add_argument("--attack", type=str, default="SceneTAP", help="Attack type: SceneTAP")
-    parser.add_argument("--image-folder", type=str, default="")
-    parser.add_argument("--question-file", type=str, default="tables/question.jsonl")
-    parser.add_argument("--log_dir", type=str, default="./log")
+    parser.add_argument("--attack", type=str, default="TextAnalysis", help="Attack type: SceneTAP")
+    parser.add_argument("--image-folder", type=str, default="../data_filteration/passed_images_gqa/")
+    parser.add_argument("--question-file", type=str, default="./gqa_modified/failed_images_revised.json")
+    parser.add_argument("--log_dir", type=str, default="./log_gqa")
 
     # chatgpt
     parser.add_argument("--temperature", type=float, default=0)
@@ -53,13 +55,13 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=0)
 
     # som
-    parser.add_argument("--slider", type=float, default=2)
-    parser.add_argument("--filter", type=float, default=None)
+    parser.add_argument("--slider", type=float, default=3)
+    parser.add_argument("--filter", type=float, default=10.0)
     
     
     # indices
-    parser.add_argument("--start", type=int, default=0)
-    parser.add_argument("--end", type=int, default=3153)
+    parser.add_argument("--start", type=int, default=2)
+    parser.add_argument("--end", type=int, default=3)
 
 
     # seed
@@ -115,7 +117,7 @@ if __name__ == "__main__":
 
     # Attack planner
     if args.attack == "SceneTAP" or args.attack == "TextAnalysis":
-        som_base_path = "./som_images"
+        som_base_path = "./som_images_gqa"
         som_image_folder = os.path.join(som_base_path, args.dataset, f"slider_{args.slider}", f"seed_{args.seed}", f"filter_{args.filter}")
         typo_attack_planner = TypoAttackPlanner(som_image_folder)
         
@@ -133,7 +135,7 @@ if __name__ == "__main__":
             continue
 
         question_id = data["question_id"]
-        image_name = data["image"]
+        image_name = data["image_id"]
         if ("vqav2" in args.dataset or "LingoQA" in args.dataset) and args.attack != "no_attack":
             image_name_save = f"{image_name.split('.')[0]}_{question_id}.{image_name.split('.')[1]}"
             if args.attack != "SceneTAP":
@@ -146,9 +148,12 @@ if __name__ == "__main__":
 
         
         # Also check diffusion subfolders for existing processed images
-        diffusion_base_path = "./logs/gpt-4o/typo_base_color/TextAnalysis/seed_42/diffusion2"
-        subfolders = [name.split('_')[0] for name in os.listdir(diffusion_base_path) if os.path.isdir(os.path.join(diffusion_base_path, name))]
-        if image_name_save.split('.')[0] in subfolders:
+        # diffusion_base_path = "./logs/gpt-4o/typo_base_color/TextAnalysis/seed_42/diffusion2"
+        cache_folder = './cache_gqa_failed_images/'
+        subfolders = [name.split('.')[0] for name in os.listdir(cache_folder)]
+        # print(subfolders)
+        # print(data['question_id'] + '_' + data['image_id'])
+        if  (data['question_id'] + '_' + data['image_id']) in subfolders:
             print(f"Image at index {i} already exists in diffusion subfolders, skipping...")
             continue
 
@@ -156,8 +161,8 @@ if __name__ == "__main__":
         image_path = os.path.join(args.image_folder, image_name)
 
         question = data["question"]
-        correct_answer = data["answer"]
-        options = {"A": data['A'], "B": data['B'], "C": data['C'], "D": data['D']}
+        correct_answer = data["correct_answer"]
+        # options = {"A": data['A'], "B": data['B'], "C": data['C'], "D": data['D']}
 
         if args.attack == "SceneTAP":
             images, seg_image, plan_detail_origin, plan_detail = typo_attack_planner.attack(
@@ -175,17 +180,18 @@ if __name__ == "__main__":
                 img.save(os.path.join(image_save_dir_diffusion, f"{k}.jpg"))
         
         elif args.attack == "TextAnalysis":
-            results = typo_attack_planner.generate_variants(image_path, question, correct_answer, options, model="gpt-4o-2024-08-06")
-            for variant in ["misleading", "irrelevant", "correct"]:
-                image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion3",
-                                                        f"{image_name_save.replace('.jpg', '')}_{variant}")
-                if os.path.exists(image_save_dir_diffusion):
-                    print(f"Image at index {i} with variant {variant} already exists, skipping...")
-                    continue
+
+            results = typo_attack_planner.generate_variants(i, args.image_folder, data)
+            for variant in ["misleading_groundable", "misleading_ungroundable", "irrelevant", "correct"]:
+                image_save_dir_diffusion = os.path.join(args.log_dir, "diffusion_gqa_2",
+                                                        f"{question_id}_{image_name_save.replace('.jpg', '')}_{variant}")
+                # if os.path.exists(image_save_dir_diffusion):
+                #     print(f"Image at index {i} with variant {variant} already exists, skipping...")
+                #     continue
                 
                 images = results[variant]['diffusion_images']
                 image = images[0]
-                image.save(os.path.join(image_save_dir, f"{image_name_save.replace('.jpg', f'_{variant}.jpg')}"))
+                image.save(os.path.join(image_save_dir, f"{question_id}_{image_name_save}_{variant}'.jpg"))
                 # diffusion save path
                 os.makedirs(image_save_dir_diffusion, exist_ok=True)
                 for k, img in enumerate(images):
