@@ -6,7 +6,7 @@
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=16
 #SBATCH -t 24:00:00
-#SBATCH --job-name=analyze_text
+#SBATCH --job-name=vlms_inference
 #SBATCH --output=jobs_logs/%x_%j.out
 #SBATCH --error=jobs_logs/%x_%j.err
 
@@ -18,15 +18,15 @@ conda activate text_in_image
 cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/inference
 
 MODELS=(
-    # "qwen-vl"
-    # "llava-next"
-    # "llava"
+    "qwen-vl"
+    "llava-next"
+    "llava"
     "internvl"
 )
 
-HF_DATASET="AHAAM/CIM"
-HF_CACHE_DIR="./hf_cache/AHAAM__CIM"
-OUTPUT_BASE="./results"
+HF_DATASET="AHAAM/GUIC"
+HF_CACHE_DIR="./hf_cache_GUIC/"
+OUTPUT_BASE="./results_GUIC/"
 
 mkdir -p "$HF_CACHE_DIR"
 mkdir -p "$OUTPUT_BASE"

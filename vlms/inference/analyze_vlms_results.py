@@ -150,6 +150,8 @@ def calculate_accuracy(results, questions_dict):
     
     for result in results:
         # Try multiple possible ID fields
+        # if result['question'] == "What is on the wall?" or result['question'] == "What's on the wall?":
+        #     continue
         qid = result.get('image_id') or result.get('question_id') or result.get('image')
         predicted = result.get('predicted_answer', '').strip().upper()
         

@@ -232,68 +232,66 @@ class HFOcclusionAnalyzer:
 
     def _compute_bbox_mask_intersections(
         self,
-        bbox: Optional[Dict],
+        bbox_xyxy: Optional[Tuple[float, float, float, float]],
         image_size: Tuple[int, int],
         grid_size: int = 16,
-        min_overlap_ratio: float = 0.1,  # ← NEW: minimum 30% overlap
+        min_overlap_ratio: float = 0.1,
     ) -> np.ndarray:
         """
-        Compute which grid patches intersect with text bbox.
-        
-        Args:
-            min_overlap_ratio: Minimum fraction of bbox that must overlap (0.0-1.0)
-                            0.0 = any touch counts
-                            0.3 = at least 30% of bbox must be in patch
-                            1.0 = entire bbox must be in patch
+        Returns a (grid_size, grid_size) boolean mask where True means the patch overlaps
+        the bbox by at least `min_overlap_ratio` of the bbox area.
+
+        bbox_xyxy: (x1, y1, x2, y2)
         """
         W, H = image_size
         patch_w = W / grid_size
         patch_h = H / grid_size
-        
-        intersection_mask = np.zeros((grid_size, grid_size), dtype=bool)
-        
-        if bbox is None:
-            return intersection_mask
-        
-        bbox_x = bbox.get('x', 0)
-        bbox_y = bbox.get('y', 0)
-        bbox_w = bbox.get('width', 0)
-        bbox_h = bbox.get('height', 0)
-        bbox_area = bbox_w * bbox_h
-        
-        bbox_x2 = bbox_x + bbox_w
-        bbox_y2 = bbox_y + bbox_h
-        
+        patch_area = patch_w * patch_h
+
+        mask = np.zeros((grid_size, grid_size), dtype=bool)
+
+        if bbox_xyxy is None:
+            return mask
+
+        x1, y1, x2, y2 = map(float, bbox_xyxy)
+        if x2 <= x1 or y2 <= y1:
+            return mask
+
+        bbox_area = (x2 - x1) * (y2 - y1)
+        if bbox_area <= 0:
+            return mask
+
         for gy in range(grid_size):
             for gx in range(grid_size):
-                patch_x1 = gx * patch_w
-                patch_y1 = gy * patch_h
-                patch_x2 = (gx + 1) * patch_w
-                patch_y2 = (gy + 1) * patch_h
-                
-                # Calculate intersection area
-                overlap_x1 = max(bbox_x, patch_x1)
-                overlap_y1 = max(bbox_y, patch_y1)
-                overlap_x2 = min(bbox_x2, patch_x2)
-                overlap_y2 = min(bbox_y2, patch_y2)
-                
-                # Check if there's any overlap
-                if overlap_x1 < overlap_x2 and overlap_y1 < overlap_y2:
-                    # Calculate overlap area
-                    overlap_area = (overlap_x2 - overlap_x1) * (overlap_y2 - overlap_y1)
-                    overlap_ratio = overlap_area / (patch_w * patch_h)
-                    
+                px1 = gx * patch_w
+                py1 = gy * patch_h
+                px2 = (gx + 1) * patch_w
+                py2 = (gy + 1) * patch_h
+
+                ox1 = max(x1, px1)
+                oy1 = max(y1, py1)
+                ox2 = min(x2, px2)
+                oy2 = min(y2, py2)
+
+                if ox1 < ox2 and oy1 < oy2:
+                    overlap_area = (ox2 - ox1) * (oy2 - oy1)
+                    overlap_ratio = overlap_area / (patch_h * patch_w)  
                     if overlap_ratio >= min_overlap_ratio:
-                        intersection_mask[gy, gx] = True
-        
-        return intersection_mask
+                        mask[gy, gx] = True
+
+        return mask
+    
+    def _xywh_to_xyxy(self, x, y, w, h):
+        return (float(x), float(y), float(x + w), float(y + h))
 
     def compute_occlusion_attribution(
         self,
         image: Image.Image,
         prompt: str,
         correct_answer: str,
-        bbox: Optional[Dict] = None,
+        text_bbox_xyxy: Optional[Tuple[float,float,float,float]] = None,
+        correct_object_bbox_xyxy: Optional[Tuple[float,float,float,float]] = None,
+        misleading_object_bbox_xyxy: Optional[Tuple[float,float,float,float]] = None,
         grid_size: int = 16,
         exclude_edge_patches: int = 1,
     ) -> Dict:
@@ -323,6 +321,20 @@ class HFOcclusionAnalyzer:
         # Extract correct answer data
         base_logit = base_answer_data[correct_answer]['logit']
         base_prob = base_answer_data[correct_answer]['prob']
+
+        # --- Compute intersection masks (NEW BLOCK) ---
+
+        text_intersection_mask = self._compute_bbox_mask_intersections(
+            text_bbox_xyxy, (W, H), grid_size
+        )
+
+        correct_object_intersection_mask = self._compute_bbox_mask_intersections(
+            correct_object_bbox_xyxy, (W, H), grid_size
+        )
+
+        misleading_object_intersection_mask = self._compute_bbox_mask_intersections(
+            misleading_object_bbox_xyxy, (W, H), grid_size
+        )
         
         # Initialize arrays
         logit_diffs = np.zeros((grid_size, grid_size), dtype=np.float32)
@@ -336,10 +348,6 @@ class HFOcclusionAnalyzer:
             valid_mask[:, :exclude_edge_patches] = False
             valid_mask[:, -exclude_edge_patches:] = False
         
-        # Compute text intersection mask
-        text_intersection_mask = self._compute_bbox_mask_intersections(
-            bbox, (W, H), grid_size
-        )
         
         # Occlude each patch
         for gy in tqdm(range(grid_size), desc="Occlusion", leave=False):
@@ -383,88 +391,162 @@ class HFOcclusionAnalyzer:
             'base_answer_data': base_answer_data,
             'valid_mask': valid_mask,
             'text_intersection_mask': text_intersection_mask,
+            'correct_object_intersection_mask': correct_object_intersection_mask,
+            'misleading_object_intersection_mask': misleading_object_intersection_mask,
             'correct_answer': correct_answer,
         }
 
     def load_hf_dataset(self, dataset_id: str, cache_dir: str = "./hf_dataset_local_cache") -> List[Dict]:
-        """Load dataset from HuggingFace."""
+        """
+        Load GUIC from HuggingFace and build a list of question dicts that include:
+        - image_variants: PIL images for all variants
+        - options / answer (MCQ letters)
+        - variant_bboxes: for every variant, includes:
+            * text_bbox_xyxy (None for notext)
+            * correct_object_bbox_xyxy (always present)
+            * misleading_object_bbox_xyxy (always present)
+        - label_to_key: mapping from option letter -> which variant text it came from
+            (useful if you shuffle options)
+
+        NOTE: This assumes GUIC schema:
+        sample["notext"]["image"]
+        sample["correct_answer"]["image"], ["text"], ["bbox"], and ["x","y","w","h"]
+        sample["misleading_groundable"]["image"], ["text"], ["bbox"], and ["x","y","w","h"]
+        sample["misleading_ungroundable"]["image"], ["text"], ["bbox"]
+        sample["irrelevant_word"]["image"], ["text"], ["bbox"]
+        """
         print(f"Loading HuggingFace dataset: {dataset_id}")
         ds = get_or_download_hf_dataset(dataset_id, cache_dir, split="test")
-        
+
         if isinstance(ds, DatasetDict):
             split_name = "test" if "test" in ds else list(ds.keys())[0]
             dataset = ds[split_name]
         else:
             dataset = ds
-        
+
         print(f"Dataset size: {len(dataset)} samples")
-        
-        variants = ['notext', 'correct', 'irrelevant', 'misleading']
-        questions_data = []
-        
+
+        variants = [
+            "notext",
+            "correct_answer",
+            "misleading_groundable",
+            "misleading_ungroundable",
+            "irrelevant_word",
+        ]
+
+        def xywh_to_xyxy(x, y, w, h):
+            return (float(x), float(y), float(x + w), float(y + h))
+
+        def to_xyxy(b):
+            if b is None:
+                return None
+            if isinstance(b, (list, tuple)) and len(b) == 4:
+                return (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+            return None
+
+        questions_data: List[Dict] = []
+
         print("Building questions list...")
         for idx in tqdm(range(len(dataset)), desc="Loading questions"):
             try:
                 sample = dataset[idx]
-                
+
                 question_id = sample.get("question_id") or f"q_{idx}"
                 question = sample.get("question", "")
-                choices = sample.get("choices", [])
-                
-                options = {}
+
+                # ----------------------------
+                # Build MCQ options (A-D)
+                # ----------------------------
+                candidates = [
+                    ("correct_answer", sample["correct_answer"]["text"]),
+                    ("misleading_groundable", sample["misleading_groundable"]["text"]),
+                    ("misleading_ungroundable", sample["misleading_ungroundable"]["text"]),
+                    ("irrelevant_word", sample["irrelevant_word"]["text"]),
+                ]
+
                 labels = ["A", "B", "C", "D"]
-                for i, lbl in enumerate(labels):
-                    options[lbl] = choices[i] if i < len(choices) else ""
-                
-                answer = sample.get("answer", "")
-                
-                # ← CHANGED: Get bounding box from text_overlays
+
+                # OPTIONAL: shuffle per-question deterministically (recommended)
+                import random
+                rng = random.Random(f"42_{question_id}")
+                rng.shuffle(candidates)
+
+                options = {labels[i]: candidates[i][1] for i in range(4)}
+                label_to_key = {labels[i]: candidates[i][0] for i in range(4)}
+                correct_label = labels[[k for k, _ in candidates].index("correct_answer")]
+                answer = correct_label
+
+                # ----------------------------
+                # Object bboxes (xywh -> xyxy)
+                # ----------------------------
+                correct_obj_xyxy = xywh_to_xyxy(
+                    sample["correct_answer"]["x"],
+                    sample["correct_answer"]["y"],
+                    sample["correct_answer"]["w"],
+                    sample["correct_answer"]["h"],
+                )
+
+                misleading_obj_xyxy = xywh_to_xyxy(
+                    sample["misleading_groundable"]["x"],
+                    sample["misleading_groundable"]["y"],
+                    sample["misleading_groundable"]["w"],
+                    sample["misleading_groundable"]["h"],
+                )
+
+                # ----------------------------
+                # Text bbox per variant (xyxy)
+                # ----------------------------
+                text_bbox_by_variant = {"notext": None}
+                for v in ["correct_answer", "misleading_groundable", "misleading_ungroundable", "irrelevant_word"]:
+                    text_bbox_by_variant[v] = to_xyxy(sample[v].get("bbox", None))
+
+                # Bundle all bbox types for every variant
                 variant_bboxes = {}
-                text_overlays = sample["text_overlays"]
+                for v in variants:
+                    variant_bboxes[v] = {
+                        "text_bbox_xyxy": text_bbox_by_variant.get(v),
+                        "correct_object_bbox_xyxy": correct_obj_xyxy,
+                        "misleading_object_bbox_xyxy": misleading_obj_xyxy,
+                    }
 
-                for variant in ['correct', 'misleading', 'irrelevant']:
-                    if variant in text_overlays:
-                        bbox_xyxy = text_overlays[variant]["text_bbox_xyxy"]
-                        if bbox_xyxy is not None and len(bbox_xyxy) == 4:
-                            x1, y1, x2, y2 = bbox_xyxy
-                            variant_bboxes[variant] = {
-                                'x': float(x1),
-                                'y': float(y1),
-                                'width': float(x2 - x1),
-                                'height': float(y2 - y1)
-                            }
-
-                # For notext, set to None
-                variant_bboxes['notext'] = None
-                
+                # ----------------------------
+                # Load images for all variants
+                # ----------------------------
                 image_variants = {}
-                for variant in variants:
-                    img_obj = sample.get(variant)
-                    if img_obj is not None:
-                        if isinstance(img_obj, Image.Image):
-                            image_variants[variant] = img_obj
-                
-                if image_variants:
-                    questions_data.append({
-                        'question_id': question_id,
-                        'question': question,
-                        'options': options,
-                        'answer': answer,
-                        'variant_bboxes': variant_bboxes,  # Now this will have actual values!
-                        'image_variants': image_variants,
-                        'text_overlays': text_overlays,  # ← Optional: save for reference
-                    })
-            
+
+                # notext image
+                img0 = sample["notext"]["image"]
+                if isinstance(img0, Image.Image):
+                    image_variants["notext"] = img0.convert("RGB")
+
+                # overlay variants
+                for v in ["correct_answer", "misleading_groundable", "misleading_ungroundable", "irrelevant_word"]:
+                    imgv = sample[v]["image"]
+                    if isinstance(imgv, Image.Image):
+                        image_variants[v] = imgv.convert("RGB")
+
+                if not image_variants:
+                    continue
+
+                questions_data.append({
+                    "question_id": question_id,
+                    "question": question,
+                    "options": options,
+                    "answer": answer,                 # correct letter after shuffling
+                    "label_to_key": label_to_key,     # A/B/C/D -> which variant's text it is
+                    "variant_bboxes": variant_bboxes, # all bbox types for every variant
+                    "image_variants": image_variants,
+                    # Optional extra metadata if you want it:
+                    "caption": sample.get("caption", ""),
+                    "image_id": sample.get("image_id", ""),
+                    "seg_id": sample.get("seg_id", None),
+                })
+
             except Exception as e:
                 print(f"⚠️  Error loading sample {idx}: {e}")
                 continue
-        
+
         print(f"✓ Loaded {len(questions_data)} questions with image variants")
-        
-        # ← ADD: Debug print to verify bboxes are loaded
-        # bboxes_found = sum(1 for q in questions_data if q['bbox'] is not None)
-        # print(f"✓ Found bboxes for {bboxes_found}/{len(questions_data)} questions\n")
-        
         return questions_data
 
     def categorize_pattern(self, variant_predictions: Dict[str, str], correct_answer: str) -> str:
@@ -536,17 +618,19 @@ class HFOcclusionAnalyzer:
         for variant_name, image in question_data['image_variants'].items():
             print(f"  Processing {variant_name}...")
             
-            bbox = variant_bboxes.get(variant_name, None)  # ← Changed
+            bb = variant_bboxes.get(variant_name, {})
 
             attribution_data = self.compute_occlusion_attribution(
                 image=image,
                 prompt=prompt,
                 correct_answer=correct_answer,
-                bbox=bbox,
+                text_bbox_xyxy=bb.get("text_bbox_xyxy"),
+                correct_object_bbox_xyxy=bb.get("correct_object_bbox_xyxy"),
+                misleading_object_bbox_xyxy=bb.get("misleading_object_bbox_xyxy"),
                 grid_size=grid_size,
                 exclude_edge_patches=1 if exclude_edges else 0,
             )
-            
+                        
             # Add prediction info
             attribution_data['predicted_answer'] = variant_predictions[variant_name]
             attribution_data['is_correct'] = (variant_predictions[variant_name] == correct_answer)
@@ -582,6 +666,8 @@ class HFOcclusionAnalyzer:
             arrays_to_save[f'{variant_name}_prob_diffs'] = variant_data['prob_diffs']
             arrays_to_save[f'{variant_name}_valid_mask'] = variant_data['valid_mask']
             arrays_to_save[f'{variant_name}_text_intersection'] = variant_data['text_intersection_mask']
+            arrays_to_save[f"{variant_name}_correct_obj_intersection"] = variant_data["correct_object_intersection_mask"]
+            arrays_to_save[f"{variant_name}_misleading_obj_intersection"] = variant_data["misleading_object_intersection_mask"]
             
             # Save metadata
             metadata['variants'][variant_name] = {
@@ -617,7 +703,9 @@ class HFOcclusionAnalyzer:
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Load dataset
+        print('here')
         questions_data = self.load_hf_dataset(dataset_id, cache_dir)
+        print(len(questions_data))
         
         if max_samples:
             questions_data = questions_data[:max_samples]
@@ -633,6 +721,8 @@ class HFOcclusionAnalyzer:
         
         for idx, question_data in enumerate(tqdm(questions_data, desc="Processing questions")):
             print(f"\n[{idx+1}/{len(questions_data)}] Question: {question_data['question_id']}")
+            print(start)
+            print(end)
             if idx < start:
                 continue
             if idx >= end:
@@ -685,17 +775,17 @@ def main():
     )
     parser.add_argument(
         "--dataset_id",
-        default="AHAAM/CIM",
+        default="AHAAM/GUIC",
         help="HuggingFace dataset ID (e.g., AHAAM/CIM)",
     )
     parser.add_argument(
         "--output_dir",
-        default="./occlusion_results",
+        default="./occlusion_results_GUIC",
         help="Output directory for results",
     )
     parser.add_argument(
         "--cache_dir",
-        default="./hf_dataset_local_cache",
+        default="./hf_dataset_GUIC",
         help="Cache directory for HF dataset",
     )
     parser.add_argument(

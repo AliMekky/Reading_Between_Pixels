@@ -7,7 +7,7 @@
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=16
 #SBATCH -t 24:00:00
-#SBATCH --job-name=analyze_text
+#SBATCH --job-name=occlusion
 #SBATCH --output=jobs_logs/%x_%j.out
 #SBATCH --error=jobs_logs/%x_%j.err
 
@@ -20,7 +20,7 @@ cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/occlus
 
 
 model="llava-next"
-output_dir="./${model}_occlusions_results"
+output_dir="./${model}_occlusions_results_gqa"
 
 
 echo "Starting activations extraction runs at $(date)"
@@ -36,16 +36,16 @@ START_TIME=$(date +%s)
 python -u updated_occlusion.py \
     --output_dir "$output_dir" \
     --model_type "$model" \
-    --start 900 \
-    --end 975 \
-    > logs/occ_900_975.log 2>&1 &
+    --start 200 \
+    --end 300 \
+    > logs_gqa/occ_0_100.log 2>&1 &
 
 python -u updated_occlusion.py \
     --output_dir "$output_dir" \
     --model_type "$model" \
-    --start 975 \
-    --end 1063 \
-    > logs/occ_975_1063.log 2>&1 &
+    --start 300 \
+    --end 500 \
+    > logs_gqa/occ_100_200.log 2>&1 &
 
 
 wait
