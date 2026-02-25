@@ -65,7 +65,64 @@ from transformers.image_processing_utils import select_best_resolution
 # ======================================================================================
 
 
-def overlay_grid_block_on_image(img, grid, out_path, title="", signed=False, cmap=None, alpha=0.55):
+def keep_top_bottom_k_within_percentiles(
+    grid: np.ndarray,
+    k: int,
+    clip_percentiles=(5, 95),
+    *,
+    signed=True,
+    fill_value=0.0,
+):
+    """
+    Keep only:
+      - lowest k values and highest k values
+    computed AFTER restricting values to be within [p5, p95] of the grid distribution.
+
+    Returns:
+      masked_grid: same shape as grid, with non-selected entries set to fill_value.
+      mask: boolean mask of selected entries (True = kept)
+    """
+    g = grid.astype(np.float32, copy=True)
+    flat = g.reshape(-1)
+
+    # Percentile clipping range
+    lo = np.percentile(flat, clip_percentiles[0])
+    hi = np.percentile(flat, clip_percentiles[1])
+
+    # Only consider values within [lo, hi] for ranking
+    in_band = (flat >= lo) & (flat <= hi) & np.isfinite(flat)
+    idx_band = np.nonzero(in_band)[0]
+
+    if k <= 0 or idx_band.size == 0:
+        mask = np.zeros_like(flat, dtype=bool)
+        return np.full_like(g, fill_value, dtype=np.float32), mask.reshape(g.shape)
+
+    vals_band = flat[idx_band]
+
+    # bottom-k and top-k indices *within the band*
+    k_eff = min(k, idx_band.size)
+
+    # bottom-k
+    bot_rel = np.argpartition(vals_band, k_eff - 1)[:k_eff]
+    # top-k
+    top_rel = np.argpartition(vals_band, -(k_eff))[-k_eff:]
+
+    keep_idx = np.unique(np.concatenate([idx_band[bot_rel], idx_band[top_rel]]))
+
+    mask = np.zeros_like(flat, dtype=bool)
+    mask[keep_idx] = True
+
+    out = np.full_like(flat, fill_value, dtype=np.float32)
+    out[mask] = flat[mask]
+    return out.reshape(g.shape), mask.reshape(g.shape)
+
+def overlay_grid_block_on_image(
+    img, grid, out_path, title="",
+    signed=False, cmap=None, alpha=0.55,
+    *,
+    show_top_bottom_k: int = 0,          # NEW: 0 disables masking
+    clip_percentiles=(5, 95),            # NEW: same idea as robust_normalize
+):
     """
     Block (nearest / 'pixelated') overlay: upsample with nearest or simple zoom so
     each token patch shows as a block. This function explicitly creates axes and
@@ -73,39 +130,53 @@ def overlay_grid_block_on_image(img, grid, out_path, title="", signed=False, cma
     """
     import matplotlib.pyplot as plt
     from scipy.ndimage import zoom
+    import numpy as np
 
     H, W = img.height, img.width
     gh, gw = grid.shape
 
-    # Upsample grid using nearest-like behavior (order=0) to produce blocky patches
+    # If requested: keep only bottom-k + top-k within [p5, p95]
+    if show_top_bottom_k and show_top_bottom_k > 0:
+        grid_kept, mask = keep_top_bottom_k_within_percentiles(
+            grid,
+            k=show_top_bottom_k,
+            clip_percentiles=clip_percentiles,
+            signed=signed,
+            fill_value=0.0,   # value doesn't matter if we mask it
+        )
+    else:
+        grid_kept = grid
+        mask = np.ones_like(grid_kept, dtype=bool)
+
+    # Upsample with nearest-like behavior
     scale_h = H / gh
     scale_w = W / gw
-    # use order=0 for blocky/nearest behavior
-    grid_up = zoom(grid, (scale_h, scale_w), order=0)
+    grid_up = zoom(grid_kept, (scale_h, scale_w), order=0)
 
-    # Normalize for viz (signed -> [-1,1], unsigned -> [0,1])
+    # Upsample mask similarly (nearest) so transparency aligns with blocks
+    mask_up = zoom(mask.astype(np.float32), (scale_h, scale_w), order=0) > 0.5
+
+    # Normalize kept values for viz
     grid_norm = robust_normalize(grid_up, signed=signed)
 
-    # Prepare figure/axes explicitly
+    # Mask everything except the selected top/bottom-k regions
+    grid_vis = np.ma.array(grid_norm, mask=~mask_up)
+
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.imshow(img)
 
-    # Choose cmap if None
     if signed:
         if cmap is None:
             cmap = "RdBu_r"
-        mappable = ax.imshow(grid_norm, alpha=alpha, cmap=cmap, vmin=-1, vmax=1)
+        mappable = ax.imshow(grid_vis, alpha=alpha, cmap=cmap, vmin=-1, vmax=1)
     else:
         if cmap is None:
             cmap = "jet"
-        mappable = ax.imshow(grid_norm, alpha=alpha, cmap=cmap, vmin=0, vmax=1)
+        mappable = ax.imshow(grid_vis, alpha=alpha, cmap=cmap, vmin=0, vmax=1)
 
     ax.axis("off")
     ax.set_title(title)
-
-    # Use the returned mappable and pass ax to colorbar so it knows where to draw it
-    cbar = fig.colorbar(mappable, ax=ax, fraction=0.046, pad=0.04)
-    # Optionally style colorbar ticks here if you want
+    fig.colorbar(mappable, ax=ax, fraction=0.046, pad=0.04)
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=200)
@@ -1100,21 +1171,27 @@ def main():
             base_grid_perm_norm = robust_normalize(base_grid_perm, signed=True)
             mosaic_grid_perm_norm = robust_normalize(mosaic_grid_perm, signed=True)
 
-            overlay_grid_block_on_image(
-                img=image,
-                grid=base_grid_perm_norm,
-                out_path=str(out_dir / f"overlay_base_PERM_{args.mode}.png"),
-                title=f"{qid} | PERM | BASE",
-                signed=True,
-            )
 
-            overlay_grid_block_on_image(
-                img=image,
-                grid=mosaic_grid_perm_norm,
-                out_path=str(out_dir / f"overlay_mosaic_PERM_{args.mode}.png"),
-                title=f"{qid} | PERM | MOSAIC",
-                signed=True,
-            )
+            if args.debug_permutation:
+                overlay_grid_block_on_image(
+                    img=image,
+                    grid=base_grid_perm,
+                    out_path=str(out_dir / f"overlay_base_PERM_{args.mode}.png"),
+                    title=f"{qid} | PERM | BASE",
+                    signed=True,
+                    show_top_bottom_k=args.top_k,        # use your existing --top_k
+                    clip_percentiles=(5, 95),
+                )
+
+                overlay_grid_block_on_image(
+                    img=image,
+                    grid=mosaic_grid_perm,
+                    out_path=str(out_dir / f"overlay_mosaic_PERM_{args.mode}.png"),
+                    title=f"{qid} | PERM | MOSAIC",
+                    signed=True,
+                    show_top_bottom_k=args.top_k,
+                    clip_percentiles=(5, 95),
+                )
 
         # Optional clipping (you said you don't want it; keep args.viz_clamp=0.0)
         if args.viz_clamp and args.viz_clamp > 0:
@@ -1141,23 +1218,46 @@ def main():
         base_overlay_path = out_dir / f"overlay_base_{args.mode}.png"
         mosaic_overlay_path = out_dir / f"overlay_mosaic_{args.mode}.png"
 
-        overlay_grid_block_on_image(
-            img=image,
-            grid=base_grid_norm,
-            out_path=str(base_overlay_path),
-            cmap=args.viz_diverging,
-            title=f"{qid} | {args.variant} | {args.mode} | BASE (signed)",
-            signed=True,
-        )
+        if args.block_overlay:
+            overlay_grid_block_on_image(
+                img=image,
+                grid=base_grid,
+                out_path=str(base_overlay_path),
+                cmap=args.viz_diverging,
+                title=f"{qid} | {args.variant} | {args.mode} | BASE (signed)",
+                signed=True,
+                show_top_bottom_k=args.top_k,
+                clip_percentiles=(5, 95),
+            )
 
-        overlay_grid_block_on_image(
-            img=image,
-            grid=mosaic_grid_norm,
-            out_path=str(mosaic_overlay_path),
-            cmap=args.viz_diverging,
-            title=f"{qid} | {args.variant} | {args.mode} | MOSAIC (signed)",
-            signed=True,
-        )
+            overlay_grid_block_on_image(
+                img=image,
+                grid=mosaic_grid,
+                out_path=str(mosaic_overlay_path),
+                cmap=args.viz_diverging,
+                title=f"{qid} | {args.variant} | {args.mode} | MOSAIC (signed)",
+                signed=True,
+                show_top_bottom_k=args.top_k,
+                clip_percentiles=(5, 95),
+            )
+        else:
+            overlay_grid_on_image(
+                img=image,
+                grid=base_grid_norm,
+                out_path=str(base_overlay_path),
+                cmap=args.viz_diverging,
+                title=f"{qid} | {args.variant} | {args.mode} | BASE (signed)",
+                signed=True,
+            )
+
+            overlay_grid_on_image(
+                img=image,
+                grid=mosaic_grid_norm,
+                out_path=str(mosaic_overlay_path),
+                cmap=args.viz_diverging,
+                title=f"{qid} | {args.variant} | {args.mode} | MOSAIC (signed)",
+                signed=True,
+            )
 
         # Save run info
         info = {
