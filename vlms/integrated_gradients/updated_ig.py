@@ -1208,6 +1208,7 @@ def main():
             "token_scores": token_scores,
             "meta": json.dumps(meta),
             "mapping_summary": json.dumps(mapping["summary"]),
+            "mapping_tokens": json.dumps(mapping_tokens),   # <-- ADD THIS
         }
         if args.save_grids:
             save_dict["base_grid_signed"] = base_grid
