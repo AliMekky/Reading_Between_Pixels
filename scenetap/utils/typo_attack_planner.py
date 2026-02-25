@@ -184,19 +184,21 @@ class TypoAttackPlanner:
             self.random_words = json.load(f)
         
 
-    def generate_variants(self, image_path, question, correct_answer, options, model="gpt-4o-2024-08-06", FIXED_POSITION_CACHE=None):
+    def generate_variants(self, i, image_folder, data):
             """
             Generate all three text variants using the SAME text_position_number.
             Returns supporting, misleading, and irrelevant plans with identical positions.
             """
             # Load the image
+            image_path = os.path.join(image_folder, data['image_id'] + '.jpg')
+
             image = Image.open(image_path).convert("RGB")
 
-            # Load som image and mask
-            image_name = image_path.split("/")[-1]
+            # # Load som image and mask
+            # image_name = image_path.split("/")[-1]
 
-            seg_image = Image.open(os.path.join(self.som_image_folder, image_name)).convert("RGB")
-            mask = np.load(os.path.join(self.som_image_folder, image_name.replace(".jpg", ".npy")), allow_pickle=True)
+            seg_image = Image.open(os.path.join(self.som_image_folder, data['image_id'] + '.jpg')).convert("RGB")
+            mask = np.load(os.path.join(self.som_image_folder, data['image_id'] + '.npy'), allow_pickle=True)
 
             # get typo attack plan from chatgpt
             base64_image = pil_to_base64(image)
@@ -206,56 +208,59 @@ class TypoAttackPlanner:
             # STEP 1: Get the best region and caption from the model
             # ============================================
 
-            completion_request = CompletionRequest(
-                model=model, 
-                top_p=self.top_p,
-                response_format=PlanTextAnalysis
-            )
-            completion_request.set_system_instruction(self.instruction)
+            # completion_request = CompletionRequest(
+            #     model=model, 
+            #     top_p=self.top_p,
+            #     response_format=PlanTextAnalysis
+            # )
+            # completion_request.set_system_instruction(self.instruction)
 
             # Format options for the prompt
-            user_text = f"Image 0 is the original image, Image 1 is the corresponding segmentation map. Observe the image and the corresponding segmentation map carefully. Please provide the segmentation number and the caption"
+            # user_text = f"Image 0 is the original image, Image 1 is the corresponding segmentation map. Observe the image and the corresponding segmentation map carefully. Please provide the segmentation number and the caption"
 
-            completion_request.add_user_message(text=user_text, base64_image=[base64_image, base64_image_som], image_first=True)
+            # completion_request.add_user_message(text=user_text, base64_image=[base64_image, base64_image_som], image_first=True)
 
             # Adjust misleading plan
-            max_retries = 3
+            # max_retries = 3
 
-            for attempt in range(1, max_retries + 1):
-                try:
-                    completion = completion_request.get_completion_payload()
+            # for attempt in range(1, max_retries + 1):
+            #     try:
+            #         completion = completion_request.get_completion_payload()
 
-                    # Safely extract parsed result
-                    if (completion and getattr(completion, "choices", None)
-                            and len(completion.choices) > 0):
-                        plan = completion.choices[0].message
-                        parsed = getattr(plan, "parsed", None)
-                        if parsed and getattr(parsed, "text_position_number", None) and getattr(parsed, "short_caption", None):
-                            print("✅ Text position and caption extracted successfully.")
-                            break  # success → exit retry loop
-                        else:
-                            print("⚠️  No data found in response.")
-                    else:
-                        print("⚠️  Invalid or empty completion object.")
+            #         # Safely extract parsed result
+            #         if (completion and getattr(completion, "choices", None)
+            #                 and len(completion.choices) > 0):
+            #             plan = completion.choices[0].message
+            #             parsed = getattr(plan, "parsed", None)
+            #             if parsed and getattr(parsed, "text_position_number", None) and getattr(parsed, "short_caption", None):
+            #                 print("✅ Text position and caption extracted successfully.")
+            #                 break  # success → exit retry loop
+            #             else:
+            #                 print("⚠️  No data found in response.")
+            #         else:
+            #             print("⚠️  Invalid or empty completion object.")
 
-                except Exception as e:
-                    print(f"❌ Exception on attempt {attempt}: {e}")
+            #     except Exception as e:
+            #         print(f"❌ Exception on attempt {attempt}: {e}")
 
-                # Optional small delay before retry
-                import time
-                time.sleep(1)
+            #     # Optional small delay before retry
+            #     import time
+            #     time.sleep(1)
 
             # Fallback after retries
-            if plan is None:
-                print("❗ Failed to get adjusted plan after 3 tries, using original plan.")
+            # if plan is None:
+            #     print("❗ Failed to get adjusted plan after 3 tries, using original plan.")
 
             # THE POSITION IS NOW FIXED - all other variants must use this position
-            if FIXED_POSITION_CACHE is not None:
-                FIXED_POSITION = FIXED_POSITION_CACHE
-                print(f"\n*** USING CACHED FIXED POSITION FOR ALL VARIANTS: {FIXED_POSITION} ***\n")
-            else:
-                FIXED_POSITION = parsed.text_position_number
-                CAPTION = parsed.short_caption
+            # if FIXED_POSITION_CACHE is not None:
+            #     FIXED_POSITION = FIXED_POSITION_CACHE
+            #     print(f"\n*** USING CACHED FIXED POSITION FOR ALL VARIANTS: {FIXED_POSITION} ***\n")
+            # else:
+            #     FIXED_POSITION = parsed.text_position_number
+            #     CAPTION = parsed.short_caption
+
+            FIXED_POSITION = data['seg_id']
+            CAPTION = data['caption']
             print("✅ Final Fixed Position Number:", FIXED_POSITION)
             print("✅ Caption for Text Diffusion:", CAPTION)
 
@@ -290,17 +295,24 @@ class TypoAttackPlanner:
             # STEP 3: Get the text to be overlaid for each variant
             # ============================================
             # misleading answer
-            options_list = [options['A'], options['B'], options['C'], options['D']]
-            incorrect_options = [opt for opt in options_list if opt != options[correct_answer]]
-            MISLEADING_TEXT = random.choice(incorrect_options)
+            # options_list = [options['A'], options['B'], options['C'], options['D']]
+            # incorrect_options = [opt for opt in options_list if opt != options[correct_answer]]
+            
+            
+            MISLEADING_GROUNDABLE_TEXT = data['misleading_groundable']['text']
 
             # Correct Answer (no change)
-            CORRECT_TEXT = options[correct_answer]
+            CORRECT_TEXT = data['correct_answer']['text']
             
 
+            # MISLEADING_UNGROUNDABLE_TEXT = data['misleading_ungroundable']['text']
+            MISLEADING_UNGROUNDABLE_TEXT = data['misleading_ungroundable']
+
+
             # irrelevant answer
-            self.irrelevant_rng = np.random.default_rng()
-            IRRELEVANT_TEXT = self.irrelevant_rng.choice(self.random_words)
+            # IRRELEVANT_TEXT = data['irrelevant_word']['text']
+            IRRELEVANT_TEXT = data['irrelevant_word']
+
             # IRRELEVANT_TEXT = random.choice(self.random_words)
 
 
@@ -314,45 +326,24 @@ class TypoAttackPlanner:
                 "clear, printed signage text, high contrast, wide letter spacing, no merged letters, accurate letters, natural, realistic"
             )
 
-            # ---  MISLEADING TEXT DIFFUSION ---
+            # ---  MISLEADING GROUNDABLE TEXT DIFFUSION ---
 
 
             # RESIZE BY SCALE - adjust rectangle to fit the text aspect ratio
-            ml_left, ml_top, ml_right, ml_bottom = find_text_region(
-                MISLEADING_TEXT,  # The text to fit
+            mlg_left, mlg_top, mlg_right, mlg_bottom = find_text_region(
+                MISLEADING_GROUNDABLE_TEXT,  # The text to fit
                 base_left, base_top, base_right, base_bottom,  # Base coordinates
                 font_path="./fonts/arial.ttf",
                 font_size=20, 
                 aspect_ratio_threshold=0.1
             )
-            misleading_bbox_xyxy = [int(ml_left), int(ml_top), int(ml_right), int(ml_bottom)] ## to store in cache
-
-            # dbg = image.copy()
-            # d = ImageDraw.Draw(dbg)
-            # d.rectangle(
-            #     [int(base_left), int(base_top), int(base_right), int(base_bottom)],
-            #     outline="red", width=4
-            # )
-
-            # # draw final text bbox
-            # d.rectangle(
-            #     [int(ml_left), int(ml_top), int(ml_right), int(ml_bottom)],
-            #     outline="green", width=4
-            # )
-
-            # dbg.save("./debug_global_bbox.png")
-            # print("Saved debug_global_bbox.png")
-
-            # Create two-point positions for diffusion
-            # point_positions = [(int(left), int(top)), (int(right), int(bottom))]
-            # print("IMAGE SIZE:", image.width, image.height)
-            # print("RAW BOX:", ml_left, ml_top, ml_right, ml_bottom)
+            misleading_groundable_bbox_xyxy = [int(mlg_left), int(mlg_top), int(mlg_right), int(mlg_bottom)] ## to store in cache
 
             point_positions = [
-                (int(ml_left),  int(ml_top)),     # top-left
-                (int(ml_right), int(ml_top)),     # top-right
-                (int(ml_right), int(ml_bottom)),  # bottom-right
-                (int(ml_left),  int(ml_bottom)),  # bottom-left
+                (int(mlg_left),  int(mlg_top)),     # top-left
+                (int(mlg_right), int(mlg_top)),     # top-right
+                (int(mlg_right), int(mlg_bottom)),  # bottom-right
+                (int(mlg_left),  int(mlg_bottom)),  # bottom-left
             ]
 
 
@@ -360,7 +351,7 @@ class TypoAttackPlanner:
             diffusion_result = self.diffuser.generate(
                 point_positions, 
                 image_path, 
-                MISLEADING_TEXT,
+                MISLEADING_GROUNDABLE_TEXT,
                 CAPTION, 
                 # radio="Two Points",
                 radio="Four Points",
@@ -370,13 +361,57 @@ class TypoAttackPlanner:
             )
 
             # Resize diffusion images to match original image size
-            misleading_diffusion_images = diffusion_result[0]
-            misleading_diffusion_images = [img.resize((image.width, image.height)) for img in misleading_diffusion_images]
+            misleading_groundable_diffusion_images = diffusion_result[0]
+            misleading_groundable_diffusion_images = [img.resize((image.width, image.height)) for img in misleading_groundable_diffusion_images]
 
-            results['misleading'] = {
-                'text': MISLEADING_TEXT,
-                'diffusion_images': misleading_diffusion_images,
-                'coordinates': (ml_left, ml_top, ml_right, ml_bottom)
+            results['misleading_groundable'] = {
+                'text': MISLEADING_GROUNDABLE_TEXT,
+                'diffusion_images': misleading_groundable_diffusion_images,
+                'coordinates': (mlg_left, mlg_top, mlg_right, mlg_bottom)
+            }
+
+            # ---  MISLEADING UNGROUNDABLE TEXT DIFFUSION ---
+
+
+            # RESIZE BY SCALE - adjust rectangle to fit the text aspect ratio
+            mlu_left, mlu_top, mlu_right, mlu_bottom = find_text_region(
+                MISLEADING_UNGROUNDABLE_TEXT,  # The text to fit
+                base_left, base_top, base_right, base_bottom,  # Base coordinates
+                font_path="./fonts/arial.ttf",
+                font_size=20, 
+                aspect_ratio_threshold=0.1
+            )
+            misleading_ungroundable_bbox_xyxy = [int(mlu_left), int(mlu_top), int(mlu_right), int(mlu_bottom)] ## to store in cache
+
+            point_positions = [
+                (int(mlu_left),  int(mlu_top)),     # top-left
+                (int(mlu_right), int(mlu_top)),     # top-right
+                (int(mlu_right), int(mlu_bottom)),  # bottom-right
+                (int(mlu_left),  int(mlu_bottom)),  # bottom-left
+            ]
+
+
+            # Run diffusion
+            diffusion_result = self.diffuser.generate(
+                point_positions, 
+                image_path, 
+                MISLEADING_UNGROUNDABLE_TEXT,
+                CAPTION, 
+                # radio="Two Points",
+                radio="Four Points",
+                # positive_prompt = positive_prompt,
+                scale_factor=3, 
+                regional_diffusion=True
+            )
+
+            # Resize diffusion images to match original image size
+            misleading_ungroundable_diffusion_images = diffusion_result[0]
+            misleading_ungroundable_diffusion_images = [img.resize((image.width, image.height)) for img in misleading_ungroundable_diffusion_images]
+
+            results['misleading_ungroundable'] = {
+                'text': MISLEADING_UNGROUNDABLE_TEXT,
+                'diffusion_images': misleading_ungroundable_diffusion_images,
+                'coordinates': (mlu_left, mlu_top, mlu_right, mlu_bottom)
             }
 
             # --- IRRELEVANT TEXT DIFFUSION ---
@@ -472,23 +507,27 @@ class TypoAttackPlanner:
             # ============================================
             
             # Define cache directory and file path
-            cache_dir = "./cache"
+            cache_dir = "./cache_gqa_failed_images"
             os.makedirs(cache_dir, exist_ok=True)
             
             # Create a unique cache filename based on image name
-            image_name_base = os.path.splitext(image_name)[0]
-            cache_file = os.path.join(cache_dir, f"{image_name_base}_cache.json")
+            image_name_base = data['image_id']
+            cache_file = os.path.join(cache_dir, f"{data['question_id']}_{image_name_base}.json")
             
             # Prepare cache data
             cache_data = {
-                "image_name": image_name,
+                "image_name": data['image_id'],
                 "fixed_position": FIXED_POSITION,
                 "caption": CAPTION,
                 "base_bbox_xyxy": base_bbox_xyxy,   # <-- PRE (shared anchor)
                 "variants": {
-                    "misleading": {
-                        "text": MISLEADING_TEXT,
-                        "text_bbox_xyxy": misleading_bbox_xyxy,   # <-- POST (exact intended text box)
+                    "misleading_groundable": {
+                        "text": MISLEADING_GROUNDABLE_TEXT,
+                        "text_bbox_xyxy": misleading_groundable_bbox_xyxy,   # <-- POST (exact intended text box)
+                    },
+                     "misleading_ungroundable": {
+                        "text": MISLEADING_UNGROUNDABLE_TEXT,
+                        "text_bbox_xyxy": misleading_ungroundable_bbox_xyxy,   # <-- POST (exact intended text box)
                     },
                     "irrelevant": {
                         "text": IRRELEVANT_TEXT,
@@ -499,7 +538,7 @@ class TypoAttackPlanner:
                         "text_bbox_xyxy": correct_bbox_xyxy,
                     }
                 },
-                "question": question,
+                "question": data['question'],
                 "correct_answer": CORRECT_TEXT,
                 "timestamp": datetime.now().isoformat()
             }

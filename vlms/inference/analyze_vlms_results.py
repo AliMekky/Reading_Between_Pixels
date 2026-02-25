@@ -375,6 +375,7 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
                 if len(variant_data) > 0:
                     x_pos = base_x + (variant_idx * bar_width)
                     acc = variant_data['Accuracy (%)'].values[0]
+                    # acc = 0 if variant in ['misleading_groundable', 'misleading_ungroundable', 'correct_answer'] else acc
 
                     if variant not in variant_colors:
                         continue
