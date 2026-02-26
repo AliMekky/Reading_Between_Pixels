@@ -4,4 +4,7 @@ Pillow>=9.0.0
 tqdm>=4.65.0
 accelerate>=0.20.0
 torchvision>=0.15.0
-qwen-vl-utils>=0.0.1
+qwen-vl-utils>=0.0.
+matplotlib
+scipy
+captum

@@ -806,7 +806,7 @@ def main():
     parser.add_argument(
         "--grid_size",
         type=int,
-        default=16,
+        default=8,
         help="Grid size for occlusion patches",
     )
     parser.add_argument(

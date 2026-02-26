@@ -20,7 +20,7 @@ cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/occlus
 
 
 model="llava-next"
-output_dir="./${model}_occlusions_results_gqa"
+output_dir="./${model}_occlusions_results_gqa_grid_8"
 
 
 echo "Starting activations extraction runs at $(date)"
@@ -36,16 +36,16 @@ START_TIME=$(date +%s)
 python -u updated_occlusion.py \
     --output_dir "$output_dir" \
     --model_type "$model" \
-    --start 200 \
-    --end 300 \
-    > logs_gqa/occ_0_100.log 2>&1 &
-
-python -u updated_occlusion.py \
-    --output_dir "$output_dir" \
-    --model_type "$model" \
-    --start 300 \
+    --start 400 \
     --end 500 \
-    > logs_gqa/occ_100_200.log 2>&1 &
+    > logs_gqa/occ_400_500.log 2>&1 &
+
+# python -u updated_occlusion.py \
+#     --output_dir "$output_dir" \
+#     --model_type "$model" \
+#     --start 300 \
+#     --end 400 \
+#     > logs_gqa/occ_300_400.log 2>&1 &
 
 
 wait

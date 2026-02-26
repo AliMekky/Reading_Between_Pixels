@@ -962,20 +962,20 @@ def main():
     p.add_argument("--hf_cache_dir", type=str, default="./hf_dataset_GUIC")
     p.add_argument("--split", type=str, default="test")
 
-    p.add_argument("--ids_file", type=str, default="../inference/only_misleading_ungroundable.txt", help="File with question_ids to keep (one per line).")
-    p.add_argument("--variant", type=str, default="misleading_ungroundable",
+    p.add_argument("--ids_file", type=str, default="../inference/no_overlap_question_ids.txt", help="File with question_ids to keep (one per line).")
+    p.add_argument("--variant", type=str, default="notext",
                    choices=["notext", "correct_answer", "misleading_groundable", "misleading_ungroundable", "irrelevant_word"])
     p.add_argument("--shuffle_options", action="store_true")
     p.add_argument("--seed", type=int, default=42)
 
-    p.add_argument("--mode", type=str, default="teacher_forced",
+    p.add_argument("--mode", type=str, default="prefill_next_token",
                    choices=["teacher_forced", "prefill_next_token"])
     p.add_argument("--steps", type=int, default=256)
-    p.add_argument("--top_k", type=int, default=50)
+    p.add_argument("--top_k", type=int, default=0)
     p.add_argument("--kinds", type=str, default="mosaic_patch,base_patch",
                    help="Comma-separated kinds to draw: mosaic_patch,base_patch")
     p.add_argument("--out_dir", type=str, default="./ig_token_outputs")
-    p.add_argument("--max_samples", type=int, default=4, help="0 = no limit")
+    p.add_argument("--max_samples", type=int, default=0, help="0 = no limit")
 
     p.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     p.add_argument("--viz_signed", action="store_true", help="Use signed values (recommended).")
@@ -988,6 +988,9 @@ def main():
     p.add_argument("--debug_permutation", action="store_true")
     p.add_argument("--block_overlay", action="store_true", help="Use block (nearest) overlay instead of smooth.")
     p.add_argument("--region_bbox", type=str, default="", help='ROI bbox as "y0,x0,y1,x1" in PIXELS for region test.')
+    p.add_argument("--start", type=int, default=0, help='Start index for processing samples.')
+    p.add_argument("--end", type=int, default=500, help='End index (exclusive) for processing samples. 0 = no limit.')
+
     args = p.parse_args()
 
     def _parse_bbox(s: str):
@@ -1027,14 +1030,27 @@ def main():
 
     processed = 0
 
+    # Read all subdirectories in output root
+    existing_subdirs = []
+    if out_root.exists():
+        existing_subdirs = [d.name for d in out_root.iterdir() if d.is_dir()]
+    print(f"Found {len(existing_subdirs)} existing subdirectories in {out_root}: {existing_subdirs}")
+
     # Iterate dataset and pick matching qids
     for i in tqdm(range(len(ds)), desc="Scanning dataset"):
+        if args.start > 0 and i < args.start:
+            continue
+        if args.end > 0 and i >= args.end:
+            break
         sample = ds[i]
         qid = sample.get("question_id", None)
         if qid is None:
             continue
         qid = str(qid)
         if qid not in keep_ids:
+            continue
+        if qid in existing_subdirs:
+            print(f"[{qid}] Output already exists, skipping.")
             continue
 
         item = build_item_from_sample(
@@ -1094,7 +1110,17 @@ def main():
         )
 
         ## Sanity check: token_scores length should match mapping summary
-        assert token_scores.shape[0] == mapping["summary"]["total_packed_image_tokens"]
+        # assert token_scores.shape[0] == mapping["summary"]["total_packed_image_tokens"]
+        if token_scores.shape[0] != mapping["summary"]["total_packed_image_tokens"]:
+            print(f"[{qid}] WARNING: token_scores N={token_scores.shape[0]} != mapping expected={mapping['summary']['total_packed_image_tokens']}")
+            # Save mismatched qid to file
+            mismatch_log = Path(args.out_dir) / "mismatched_qids.txt"
+
+            # Ensure directory exists
+            mismatch_log.parent.mkdir(parents=True, exist_ok=True)
+
+            with mismatch_log.open("a") as f:
+                f.write(f"{qid}\n")
 
         mapping_tokens = mapping["tokens"]
         expected = int(mapping["summary"]["total_packed_image_tokens"])
