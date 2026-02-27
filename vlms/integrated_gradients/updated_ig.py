@@ -1013,6 +1013,8 @@ def main():
         torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
         low_cpu_mem_usage=True,
     ).to(device)
+
+
     model.eval()
     processor = LlavaNextProcessor.from_pretrained(args.model_id)
 
