@@ -732,7 +732,7 @@ def main():
     parser.add_argument("--variant", type=str, default="misleading_groundable")
     parser.add_argument("--qid_file", type=str, default="../inference/no_overlap_question_ids.txt")
     parser.add_argument("--out_dir", type=str, default="attn_cache_gen")
-    parser.add_argument("--max_samples", type=int, default=2)
+    parser.add_argument("--max_samples", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--max_new_tokens", type=int, default=1)
 
@@ -747,13 +747,15 @@ def main():
                     help="If set, process and save only the first matching sample.")
     parser.add_argument("--sanity_checks", action="store_true",
                     help="Run sanity checks and print debug stats for the sample(s).")
+    parser.add_argument("--start", type=int, default=0, help='Start index for processing samples.')
+    parser.add_argument("--end", type=int, default=500, help='End index (exclusive) for processing samples. 0 = no limit.')
 
     args = parser.parse_args()
 
-    import transformers
-    print(transformers.__version__)
-    import torch 
-    print(torch.__version__)
+    # import transformers
+    # print(transformers.__version__)
+    # import torch 
+    # print(torch.__version__)
 
     qids = load_qid_whitelist(args.qid_file)
     print(f"Loaded {len(qids)} question_ids from: {args.qid_file}")
@@ -788,13 +790,29 @@ def main():
 
     processor = LlavaNextProcessor.from_pretrained(args.model_id)
 
+    # Read all subdirectories in output root
+
+    out_root = Path(args.out_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+    existing_subdirs = []
+    if out_root.exists():
+        existing_subdirs = [d.name for d in out_root.iterdir() if d.is_dir()]
+    print(f"Found {len(existing_subdirs)} existing subdirectories in {out_root}: {existing_subdirs}")
+
     kept = 0
     for i in tqdm(range(len(ds)), desc=f"Caching gen-token attn (chat template) [{args.variant}]"):
         sample = ds[i]
         qid = str(sample.get("question_id", f"unknown_{i}"))
         if qid not in qids:
             continue
+        if args.start > 0 and i < args.start:
+            continue
+        if args.end > 0 and i >= args.end:
+            break
 
+        if qid in existing_subdirs:
+            print(f"[{qid}] Output already exists, skipping.")
+            continue
         # choose image variant
         if args.variant == "notext":
             img = sample["notext"]["image"]
@@ -837,7 +855,7 @@ def main():
             model, processor, inputs
         )
 
-        print(attn_np, gen_info)
+        # print(attn_np, gen_info)
 
         # placeholders
         input_ids = inputs["input_ids"]
@@ -863,61 +881,62 @@ def main():
         )
 
         # ---- Debug visualization: overlay attention on image-token grids ----
-        mapping_tokens = packed_mapping["tokens"]
-        summary = packed_mapping["summary"]
+        # mapping_tokens = packed_mapping["tokens"]
+        # summary = packed_mapping["summary"]
 
         # choose which layer aggregation to visualize
         # options: "last", "mean", "layer:0", "layer:-1", "layer:15", etc.
-        num_layers = attn_np.shape[0]
+        # num_layers = attn_np.shape[0]
 
-        for layer_idx in range(num_layers):
-            token_scores = attn_np[layer_idx, img_pos].astype(np.float32)
+        # for layer_idx in range(num_layers):
+        #     token_scores = attn_np[layer_idx, img_pos].astype(np.float32)
 
-            # Optional but recommended: normalize within image tokens
-            token_scores = token_scores / (token_scores.sum() + 1e-12)
+        #     # Optional but recommended: normalize within image tokens
+        #     token_scores = token_scores / (token_scores.sum() + 1e-12)
 
-            base_grid, mosaic_grid = token_scores_to_grids(
-                mapping_tokens=mapping_tokens,
-                token_scores=token_scores,
-                summary=summary,
-            )
-            # Save overlays
-            viz_dir = Path(args.out_dir) / args.variant / qid
-            viz_dir.mkdir(parents=True, exist_ok=True)
+        #     base_grid, mosaic_grid = token_scores_to_grids(
+        #         mapping_tokens=mapping_tokens,
+        #         token_scores=token_scores,
+        #         summary=summary,
+        #     )
+        #     # Save overlays
+        #     viz_dir = Path(args.out_dir) / args.variant / qid
+        #     viz_dir.mkdir(parents=True, exist_ok=True)
 
-            overlay_base_path = viz_dir / f"attn_overlay_base_layer{layer_idx:02d}.png"
-            overlay_mosaic_path = viz_dir / f"attn_overlay_mosaic_layer{layer_idx:02d}.png"
+        #     overlay_base_path = viz_dir / f"attn_overlay_base_layer{layer_idx:02d}.png"
+        #     overlay_mosaic_path = viz_dir / f"attn_overlay_mosaic_layer{layer_idx:02d}.png"
 
-            overlay_grid_block_on_image(
-                img=img,
-                grid=base_grid,
-                out_path=str(overlay_base_path),
-                title=f"{qid} | layer {layer_idx} | BASE",
-                signed=False,
-                cmap="jet",
-                alpha=0.55,
-                show_top_bottom_k=200,
-                clip_percentiles=(5, 99),
-            )
+        #     overlay_grid_block_on_image(
+        #         img=img,
+        #         grid=base_grid,
+        #         out_path=str(overlay_base_path),
+        #         title=f"{qid} | layer {layer_idx} | BASE",
+        #         signed=False,
+        #         cmap="jet",
+        #         alpha=0.55,
+        #         show_top_bottom_k=200,
+        #         clip_percentiles=(5, 99),
+        #     )
 
-            overlay_grid_block_on_image(
-                img=img,
-                grid=mosaic_grid,
-                out_path=str(overlay_mosaic_path),
-                title=f"{qid} | layer {layer_idx} | MOSAIC",
-                signed=False,
-                cmap="jet",
-                alpha=0.55,
-                show_top_bottom_k=400,
-                clip_percentiles=(5, 99),
-            )
+        #     overlay_grid_block_on_image(
+        #         img=img,
+        #         grid=mosaic_grid,
+        #         out_path=str(overlay_mosaic_path),
+        #         title=f"{qid} | layer {layer_idx} | MOSAIC",
+        #         signed=False,
+        #         cmap="jet",
+        #         alpha=0.55,
+        #         show_top_bottom_k=400,
+        #         clip_percentiles=(5, 99),
+        #     )
         expected_img_tokens = int(packed_mapping["summary"]["total_packed_image_tokens"])
         if len(img_pos) != expected_img_tokens:
-            raise RuntimeError(
+            print(
                 f"[{qid}] Packed mapping mismatch: "
                 f"len(image_placeholder_positions)={len(img_pos)} != expected={expected_img_tokens}. "
                 "This means attention->image-token alignment is unsafe."
             )
+            continue
 
         # meta (small; mapping stored separately as json strings in npz)
         meta = {

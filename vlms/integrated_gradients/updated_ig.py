@@ -987,6 +987,7 @@ def main():
                 help="Also save base/mosaic grids in the .npz for later analysis.")
     p.add_argument("--debug_permutation", action="store_true")
     p.add_argument("--block_overlay", action="store_true", help="Use block (nearest) overlay instead of smooth.")
+    p.add_argument("--predicted", action="store_true", help="if you want to compute IG for the predicted answer token instead of the correct answer token (prefill_next_token mode only)")
     p.add_argument("--region_bbox", type=str, default="", help='ROI bbox as "y0,x0,y1,x1" in PIXELS for region test.')
     p.add_argument("--start", type=int, default=0, help='Start index for processing samples.')
     p.add_argument("--end", type=int, default=500, help='End index (exclusive) for processing samples. 0 = no limit.')
@@ -1081,13 +1082,14 @@ def main():
             print(f"[{qid}] predicted answer not a single letter: {pred_letter!r} -> skipping IG")
             continue
 
+        target_token = pred_letter if args.predicted else item["correct_letter"]
         # 2) Compute token-space IG for the chosen mode
         token_scores, meta, inputs = token_space_ig(
             model=model,
             processor=processor,
             image=image,
             mcq_prompt_text=mcq_prompt_text,
-            answer_letter=pred_letter,
+            answer_letter=target_token,
             mode=args.mode,
             steps=args.steps,
             device=device,
