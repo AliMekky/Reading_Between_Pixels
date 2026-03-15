@@ -240,8 +240,8 @@ def cell_stats(overlay_norm: np.ndarray, text_bbox_xyxy, img_size) -> str:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--ques_id", required=True, type=str)
-    p.add_argument("--out_dir", type=str, default="./ig_token_outputs")
+    p.add_argument("--ques_id", default="13539366", type=str)
+    p.add_argument("--out_dir", type=str, default="./ig_plots")
     p.add_argument("--mode", type=str, default="prefill_next_token",
                    choices=["teacher_forced", "prefill_next_token"])
     p.add_argument("--hf_dataset", type=str, default="AHAAM/GUIC")

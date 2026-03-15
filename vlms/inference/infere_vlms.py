@@ -80,6 +80,28 @@ def get_or_download_hf_dataset(
     return ds
 
 
+def compute_token_stats(inputs, tokenizer, image_token_ids=None):
+    """
+    Compute sequence length and number of image tokens.
+    """
+    input_ids = inputs["input_ids"][0].tolist()
+    tokens = tokenizer.convert_ids_to_tokens(input_ids)
+    print(tokens[:300])
+
+    input_ids = inputs["input_ids"]
+    seq_len = input_ids.shape[1]
+
+    image_tokens = 0
+    if image_token_ids is not None:
+        for tok_id in image_token_ids:
+            image_tokens += (input_ids == tok_id).sum().item()
+
+    return {
+        "sequence_length": seq_len,
+        "num_image_tokens": image_tokens
+    }
+
+
 def build_questions_from_hf_dataset(
     ds,
     variant: str = "notext",
@@ -305,8 +327,9 @@ class BaseVLMEvaluator(ABC):
         self.model = None
         self.processor = None
         self._load_model()
-        
+        print(type(self.processor))
         print("Model loaded successfully!\n")
+        
     
     @abstractmethod
     def _load_model(self):
@@ -358,6 +381,9 @@ class BaseVLMEvaluator(ABC):
         """Process a single image with a prompt."""
         image = self.load_image(image_input)
         inputs = self._prepare_inputs(image, prompt)
+
+        if hasattr(self, "print_token_stats"):
+            self.print_token_stats(inputs)
         
         with torch.inference_mode():
             gen_out = self.model.generate(
@@ -435,6 +461,8 @@ class BaseVLMEvaluator(ABC):
                 return match.group(1)
         
         return 'UNKNOWN'
+    def print_token_stats(self, inputs):
+        pass
 
 
 # ==================== Model-Specific Evaluators ====================
@@ -477,6 +505,17 @@ class LlavaEvaluator(BaseVLMEvaluator):
     
     def _decode_output(self, output) -> str:
         return self.processor.decode(output[0], skip_special_tokens=True)
+    
+    def print_token_stats(self, inputs):
+        tokenizer = self.processor.tokenizer
+
+        image_token_ids = []
+        if "<image>" in tokenizer.get_vocab():
+            image_token_ids.append(tokenizer.convert_tokens_to_ids("<image>"))
+
+        stats = compute_token_stats(inputs, tokenizer, image_token_ids)
+
+        print(f"[Token Stats] seq_len={stats['sequence_length']} | image_tokens={stats['num_image_tokens']}")
 
 
 class QwenVLEvaluator(BaseVLMEvaluator):
@@ -495,6 +534,7 @@ class QwenVLEvaluator(BaseVLMEvaluator):
         )
         self.model.eval()
         self.processor = AutoProcessor.from_pretrained(self.model_id)
+        print(type(self.processor))
     
     def _prepare_inputs(self, image: Image.Image, prompt: str) -> Dict:
         messages = [
@@ -520,6 +560,24 @@ class QwenVLEvaluator(BaseVLMEvaluator):
             padding=True,
             return_tensors="pt"
         )
+
+        grid = inputs["image_grid_thw"][0]
+        T, H, W = grid.tolist()
+
+        ip = self.processor.image_processor
+        patch_size = ip.patch_size
+        merge_size = ip.merge_size
+
+        print("image_grid_thw:", (T, H, W))
+        print("patch_size:", patch_size)
+        print("merge_size:", merge_size)
+
+        merged_h = H // merge_size
+        merged_w = W // merge_size
+
+        print("merged token grid:", (merged_h, merged_w))
+        print("num image tokens:", merged_h * merged_w)
+
         
         return inputs.to(self.device)
     
@@ -527,6 +585,18 @@ class QwenVLEvaluator(BaseVLMEvaluator):
         return self.processor.batch_decode(
             output, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
+
+    def print_token_stats(self, inputs):
+        tokenizer = self.processor.tokenizer
+
+        image_token_ids = []
+        for tok in ["<|vision_start|>", "<|vision_end|>", "<|image_pad|>"]:
+            if tok in tokenizer.get_vocab():
+                image_token_ids.append(tokenizer.convert_tokens_to_ids(tok))
+
+        stats = compute_token_stats(inputs, tokenizer, image_token_ids)
+
+        print(f"[Token Stats] seq_len={stats['sequence_length']} | image_tokens={stats['num_image_tokens']}")
 
 
 class LlavaNextEvaluator(BaseVLMEvaluator):
@@ -572,6 +642,17 @@ class LlavaNextEvaluator(BaseVLMEvaluator):
     
     def _decode_output(self, output) -> str:
         return self.processor.decode(output[0], skip_special_tokens=True)
+
+    def print_token_stats(self, inputs):
+        tokenizer = self.processor.tokenizer
+
+        image_token_ids = []
+        if "<image>" in tokenizer.get_vocab():
+            image_token_ids.append(tokenizer.convert_tokens_to_ids("<image>"))
+
+        stats = compute_token_stats(inputs, tokenizer, image_token_ids)
+
+        print(f"[Token Stats] seq_len={stats['sequence_length']} | image_tokens={stats['num_image_tokens']}")
 
 
 class InternVLEvaluator(BaseVLMEvaluator):

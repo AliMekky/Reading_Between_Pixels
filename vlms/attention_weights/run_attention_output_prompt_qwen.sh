@@ -7,7 +7,7 @@
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=16
 #SBATCH -t 24:00:00
-#SBATCH --job-name=integrated_gradients
+#SBATCH --job-name=attention_weights_qwen
 #SBATCH --output=jobs_logs/%x_%j.out
 #SBATCH --error=jobs_logs/%x_%j.err
 
@@ -16,13 +16,13 @@ mkdir -p jobs_logs
 source /apps/local/anaconda3/conda_init.sh
 conda activate text_in_image
 
-cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/
+cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/
 
 nvidia-smi
 
-model="llava-next"
-output_dir="./${model}_ig_token_outputs_correct_answer_token"
-start=400
+model="qwen-vl"
+output_dir="./${model}_attentions"
+start=0
 end=500
 
 
@@ -36,16 +36,13 @@ echo "----------------------------------------"
 START_TIME=$(date +%s)
 
 for variant in notext correct_answer misleading_groundable misleading_ungroundable irrelevant_word; do
-    python -u updated_ig.py \
+# for variant in notext; do
+    python -u attention_output_prompt_qwen.py \
         --variant "$variant" \
-        --shuffle_options \
         --out_dir "${output_dir}/${variant}" \
-        --viz_signed \
-        --save_grids \
-        --block_overlay \
+        --shuffle_options \
         --start $start \
-        --end $end \
-        > logs/ig_${variant}_${start}_${end}.log
+        --end $end 
 done
 
 

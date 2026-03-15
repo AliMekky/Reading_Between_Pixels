@@ -446,9 +446,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--npz_root", type=str, default="./llava-next_attentions",
                         help="Root directory containing <variant>/<qid>/gen_attn_gen_token.npz")
-    parser.add_argument("--variant", type=str, default="notext",
+    parser.add_argument("--variant", type=str, default="misleading_groundable",
                         help="Variant folder under npz_root (e.g., notext, misleading_groundable, correct_answer)")
-    parser.add_argument("--qid", type=str, default="",
+    parser.add_argument("--qid", type=str, default="001057860",
                         help="If provided, only process this qid. Otherwise process all qids found under variant.")
     parser.add_argument("--out_dir", type=str, default="plots",
                         help="Where to write overlays (will create <variant>/<qid>/overlays)")

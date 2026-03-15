@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
 # aggregate_plot_guic_base_mosaic_mean_of_ratios.py
+
 """
 Dataset-level GUIC analysis on a whitelist of non-overlapping question_ids.
 
-For each qid in whitelist:
-  - Load NPZ: attn (L,S_prompt), image_placeholder_positions, packed_mapping_tokens
-  - Load GUIC sample to get region bboxes:
-      - text_region: sample[variant]["bbox"] in [x1,y1,x2,y2]
-      - correct_object_region: sample["correct_answer"]["x,y,w,h"]
-      - misleading_object_region: sample["misleading_groundable"]["x,y,w,h"]
-  - Map image patch tokens to prompt indices via mapping + image_placeholder_positions
-  - Compute, per layer l, per sample s:
-      base_ratio_s[l]   = mass_s(region ∩ base)   / mass_s(base)
-      mosaic_ratio_s[l] = mass_s(region ∩ mosaic) / mass_s(mosaic)
-    (This is the "mean of ratios" approach: compute ratios per sample, then average)
+NON-SKIPPING behavior (requested):
+- If NPZ missing OR GUIC sample missing OR layer-count mismatch OR mapping mismatch:
+  -> DO NOT drop the qid from aggregation.
+  -> Instead, append all-NaN curves for that qid (so it contributes 0 to nanmean).
+  -> Log the qid into the report under the appropriate bucket.
+
+Mapping mismatch handling (requested "same as IG"):
+- If len(image_placeholder_positions) != number of packed mapping tokens:
+  -> do NOT skip
+  -> use a SAFE truncation to the common prefix K = min(len(img_pos), max_token_idx+1)
+  -> filter mapping_tokens to token_idx < K and truncate img_pos to length K
+  -> compute with that truncated alignment
+  -> record qid in report["qids_mapping_mismatch_truncated"]
+
+Metrics:
+- For each sample, per layer:
+  base_ratio[l]   = mean_attn(region ∩ base)   / mean_attn(base)
+  mosaic_ratio[l] = mean_attn(region ∩ mosaic) / mean_attn(mosaic)
+
+- Validity gating (NaN) uses the ORIGINAL denom mass:
+    gate_base[l]   = mass(base)
+    gate_mosaic[l] = mass(mosaic)
+  invalid if gate < min_denom (matches earlier behavior).
 
 Outputs:
   out_dir/<variant>/
     base_conditional_mean_of_ratios.png
     mosaic_conditional_mean_of_ratios.png
-    stream_usage.png                 (mean p(base), mean p(mosaic), mean p(image), mean p(text_prompt))
-    report.json                      (counts + settings)
-
-Legends on conditional plots:
-  - text region
-  - correct object region
-  - misleading object region
-
-Notes:
-- By default, conditionals are NaN for a sample+layer when denom < min_denom (e.g., model barely attends to base/mosaic).
-  Aggregation uses nanmean / nanpercentile so those layers are averaged over valid samples only.
+    stream_usage.png
+    report.json
 """
 
 import argparse
@@ -103,6 +107,55 @@ def intersect_area(a: Tuple[float, float, float, float], b: Tuple[float, float, 
 # -----------------------------
 # Token selection
 # -----------------------------
+def _max_token_idx(mapping_tokens: List[Dict[str, Any]]) -> int:
+    m = -1
+    for t in mapping_tokens:
+        try:
+            m = max(m, int(t.get("token_idx", -1)))
+        except Exception:
+            pass
+    return m
+
+
+def safe_align_img_pos_and_mapping(
+    img_pos: List[int],
+    mapping_tokens: List[Dict[str, Any]],
+) -> Tuple[List[int], List[Dict[str, Any]], bool, Dict[str, Any]]:
+    """
+    Returns:
+      img_pos_aligned
+      mapping_tokens_aligned
+      did_truncate (bool)
+      info (dict)
+    """
+    max_idx = _max_token_idx(mapping_tokens)
+    expected_by_mapping = max_idx + 1 if max_idx >= 0 else 0
+    K = min(len(img_pos), expected_by_mapping) if expected_by_mapping > 0 else 0
+
+    did_truncate = False
+    if expected_by_mapping != len(img_pos):
+        did_truncate = True
+
+    if K <= 0:
+        # Nothing usable; keep empty and caller will produce NaNs.
+        return [], [], did_truncate, {
+            "len_img_pos": len(img_pos),
+            "expected_by_mapping": expected_by_mapping,
+            "K": K,
+        }
+
+    img_pos2 = img_pos[:K]
+    mapping2 = [t for t in mapping_tokens if 0 <= int(t.get("token_idx", -1)) < K]
+    # Note: mapping2 might not cover all [0..K-1] if tokens are missing; that's still the safest.
+
+    return img_pos2, mapping2, did_truncate, {
+        "len_img_pos": len(img_pos),
+        "expected_by_mapping": expected_by_mapping,
+        "K": K,
+        "len_mapping_filtered": len(mapping2),
+    }
+
+
 def stream_prompt_indices(mapping_tokens: List[Dict[str, Any]], img_pos: List[int], stream: str) -> List[int]:
     if stream == "base":
         kinds = {"base_patch"}
@@ -116,6 +169,8 @@ def stream_prompt_indices(mapping_tokens: List[Dict[str, Any]], img_pos: List[in
         if t.get("kind") not in kinds:
             continue
         packed_idx = int(t["token_idx"])
+        if packed_idx < 0 or packed_idx >= len(img_pos):
+            continue
         out.append(int(img_pos[packed_idx]))
     return sorted(set(out))
 
@@ -145,9 +200,11 @@ def region_prompt_indices_from_bbox(
         bb = (float(bb[0]), float(bb[1]), float(bb[2]), float(bb[3]))  # (y0,x0,y1,x1)
 
         inter = intersect_area(bb, region_bbox_yxyx)
-        frac = inter / (bbox_area(bb) + 1e-12)
+        frac = inter / (bbox_area(bb) + 1e-12)  # overlap fraction of PATCH area
         if frac >= min_overlap_frac:
             packed_idx = int(t["token_idx"])
+            if packed_idx < 0 or packed_idx >= len(img_pos):
+                continue
             out.append(int(img_pos[packed_idx]))
     return sorted(set(out))
 
@@ -173,22 +230,26 @@ def mass_curve(attn: np.ndarray, idxs: List[int]) -> np.ndarray:
     return attn[:, idxs].sum(axis=1)
 
 
-def ratio_curve(numer: np.ndarray, denom: np.ndarray, *, min_denom: float, eps: float = 1e-12) -> np.ndarray:
-    """
-    Per-sample ratio across layers. Invalid layers (denom < min_denom) -> NaN.
-    """
+def density_curve(attn: np.ndarray, idxs: List[int]) -> np.ndarray:
+    denom = float(max(1, len(idxs)))
+    return mass_curve(attn, idxs) / denom
+
+
+def ratio_curve_with_gate(
+    numer: np.ndarray,
+    denom: np.ndarray,
+    gate: np.ndarray,
+    *,
+    min_gate: float,
+    eps: float = 1e-12,
+) -> np.ndarray:
     out = np.full_like(numer, np.nan, dtype=np.float32)
-    good = denom >= float(min_denom)
+    good = gate >= float(min_gate)
     out[good] = numer[good] / (denom[good] + float(eps))
     return out
 
 
 def mean_and_ci(curves: np.ndarray, ci: float = 95.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    curves: (N, L) possibly containing NaNs
-    returns:
-      mean (L,), lo (L,), hi (L,), n_eff (L,)  [effective non-NaN count per layer]
-    """
     mean = np.nanmean(curves, axis=0)
     lo = np.nanpercentile(curves, (100.0 - ci) / 2.0, axis=0)
     hi = np.nanpercentile(curves, 100.0 - (100.0 - ci) / 2.0, axis=0)
@@ -208,9 +269,6 @@ def plot_mean_ci_lines(
     out_path: Path,
     ylim: Optional[Tuple[float, float]] = None,
 ):
-    """
-    series: name -> (mean, lo, hi)
-    """
     plt.figure()
     for name, (m, lo, hi) in series.items():
         plt.plot(x, m, label=name)
@@ -255,19 +313,16 @@ def plot_mean_lines(
 def build_regions_from_guic(sample: Dict[str, Any], variant: str) -> Dict[str, Tuple[float, float, float, float]]:
     regions: Dict[str, Tuple[float, float, float, float]] = {}
 
-    # overlaid text bbox for this variant
     if variant == "notext":
         text_bbox_xyxy = sample["correct_answer"]["bbox"]  # fallback
     else:
         text_bbox_xyxy = sample[variant]["bbox"]
     regions["text region"] = guic_text_bbox_to_yxyx(text_bbox_xyxy)
 
-    # correct object bbox (always exists in dataset definition)
     ca = sample.get("correct_answer", None)
     if ca is not None and all(k in ca for k in ["x", "y", "w", "h"]):
         regions["correct object region"] = guic_object_bbox_xywh_to_yxyx(ca["x"], ca["y"], ca["w"], ca["h"])
 
-    # misleading grounded object bbox (only meaningful if the dataset provides it; it should)
     mg = sample.get("misleading_groundable", None)
     if mg is not None and all(k in mg for k in ["x", "y", "w", "h"]):
         regions["misleading object region"] = guic_object_bbox_xywh_to_yxyx(mg["x"], mg["y"], mg["w"], mg["h"])
@@ -280,16 +335,28 @@ def build_regions_from_guic(sample: Dict[str, Any], variant: str) -> Dict[str, T
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--npz_root", type=str, default='/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/llava-next_attentions',
-                    help="Root dir containing <variant>/<qid>/gen_attn_gen_token.npz")
-    ap.add_argument("--variant", type=str, default="irrelevant_word",
-                    choices=["correct_answer", "misleading_groundable", "misleading_ungroundable", "irrelevant_word", "notext"])
-    ap.add_argument("--qid_file", type=str, default ="../inference/no_overlap_question_ids.txt",
-                    help="Path to whitelist of non-overlapping question_ids (one per line).")
-    ap.add_argument("--out_dir", type=str, default="./plots/")
+    ap.add_argument(
+        "--npz_root",
+        type=str,
+        default="/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/llava-next_attentions",
+        help="Root dir containing <variant>/<qid>/gen_attn_gen_token.npz",
+    )
+    ap.add_argument(
+        "--variant",
+        type=str,
+        default="notext",
+        choices=["correct_answer", "misleading_groundable", "misleading_ungroundable", "irrelevant_word", "notext"],
+    )
+    ap.add_argument(
+        "--qid_file",
+        type=str,
+        default="../inference/no_overlap_question_ids.txt",
+        help="Path to whitelist of non-overlapping question_ids (one per line).",
+    )
+    ap.add_argument("--out_dir", type=str, default="./plots_normalized/")
     ap.add_argument("--min_overlap_frac", type=float, default=0.25)
     ap.add_argument("--min_denom", type=float, default=1e-4)
-    ap.add_argument("--ci", type=float, default=95.0, help="Percent CI band from percentiles (default 95).")
+    ap.add_argument("--ci", type=float, default=95.0)
     ap.add_argument("--max_samples", type=int, default=0, help="0 = no limit")
     args = ap.parse_args()
 
@@ -297,81 +364,150 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     whitelist = load_qid_whitelist(args.qid_file)
-    whitelist_set = set(whitelist)
 
     # Load GUIC and index by qid
     ds = load_dataset("AHAAM/GUIC", split="test")
     by_qid = {str(ex["question_id"]): ex for ex in ds}
 
-    # Collect per-sample curves
-    # We will build arrays of shape (N, L) for each legend region, separately for base and mosaic.
-    base_region_curves: Dict[str, List[np.ndarray]] = {
-        "text region": [],
-        "correct object region": [],
-        "misleading object region": [],
-    }
-    mosaic_region_curves: Dict[str, List[np.ndarray]] = {
-        "text region": [],
-        "correct object region": [],
-        "misleading object region": [],
-    }
+    legend_names = ["text region", "correct object region", "misleading object region"]
 
-    # Stream usage curves per sample (unconditional masses)
+    # --- Pass 0: find L_ref (first available NPZ) ---
+    L_ref: Optional[int] = None
+    S_ref: Optional[int] = None
+    first_npz_qid: Optional[str] = None
+    for qid in whitelist:
+        npz_path = Path(args.npz_root) / args.variant / args.variant / qid / "gen_attn_gen_token.npz"
+        if npz_path.exists():
+            attn, img_pos, mapping_tokens, meta, attention_mask = load_npz(str(npz_path))
+            L_ref, S_ref = attn.shape
+            first_npz_qid = qid
+            break
+    if L_ref is None:
+        raise RuntimeError("Could not find ANY NPZ to establish L_ref. Check --npz_root / --variant paths.")
+
+    # Collect per-sample curves (keep alignment with whitelist; NaNs for unusable samples)
+    base_region_curves: Dict[str, List[np.ndarray]] = {k: [] for k in legend_names}
+    mosaic_region_curves: Dict[str, List[np.ndarray]] = {k: [] for k in legend_names}
+
     base_mass_curves: List[np.ndarray] = []
     mosaic_mass_curves: List[np.ndarray] = []
     image_mass_curves: List[np.ndarray] = []
     text_prompt_mass_curves: List[np.ndarray] = []
 
-    # Track token counts for reporting
     token_counts = {
         "base_tokens": [],
         "mosaic_tokens": [],
         "text_prompt_tokens": [],
-        "region_tokens_base": {k: [] for k in base_region_curves.keys()},
-        "region_tokens_mosaic": {k: [] for k in mosaic_region_curves.keys()},
+        "region_tokens_base": {k: [] for k in legend_names},
+        "region_tokens_mosaic": {k: [] for k in legend_names},
     }
 
+    # logging buckets (non-skipping)
+    qids_missing_npz: List[str] = []
+    qids_missing_guic: List[str] = []
+    qids_layer_mismatch: List[str] = []
+    qids_mapping_mismatch_truncated: List[str] = []
+    qids_no_usable_alignment: List[str] = []
+
     used_qids: List[str] = []
-    L_ref: Optional[int] = None
+
+    def _nan_curve() -> np.ndarray:
+        return np.full((L_ref,), np.nan, dtype=np.float32)
+
+    def _zero_curve() -> np.ndarray:
+        return np.zeros((L_ref,), dtype=np.float32)
 
     for qid in whitelist:
-        if qid not in by_qid:
+        used_qids.append(qid)
+
+        # NPZ path
+        npz_path = Path(args.npz_root) / args.variant / args.variant / qid / "gen_attn_gen_token.npz"
+        if not npz_path.exists():
+            qids_missing_npz.append(qid)
+            # append NaNs/zeros so we don't drop the qid
+            for k in legend_names:
+                base_region_curves[k].append(_nan_curve())
+                mosaic_region_curves[k].append(_nan_curve())
+                token_counts["region_tokens_base"][k].append(0)
+                token_counts["region_tokens_mosaic"][k].append(0)
+            base_mass_curves.append(_zero_curve())
+            mosaic_mass_curves.append(_zero_curve())
+            image_mass_curves.append(_zero_curve())
+            text_prompt_mass_curves.append(_zero_curve())
+            token_counts["base_tokens"].append(0)
+            token_counts["mosaic_tokens"].append(0)
+            token_counts["text_prompt_tokens"].append(0)
             continue
 
-        npz_path = Path(args.npz_root) / args.variant / args.variant / qid / "gen_attn_gen_token.npz"
-        # print(npz_path)
-        if not npz_path.exists():
-            print(f"[WARN] NPZ not found for qid {qid} at expected path {npz_path}. Skipping.")
+        # GUIC sample
+        if qid not in by_qid:
+            qids_missing_guic.append(qid)
+            # append NaNs/zeros so we don't drop the qid
+            for k in legend_names:
+                base_region_curves[k].append(_nan_curve())
+                mosaic_region_curves[k].append(_nan_curve())
+                token_counts["region_tokens_base"][k].append(0)
+                token_counts["region_tokens_mosaic"][k].append(0)
+            base_mass_curves.append(_zero_curve())
+            mosaic_mass_curves.append(_zero_curve())
+            image_mass_curves.append(_zero_curve())
+            text_prompt_mass_curves.append(_zero_curve())
+            token_counts["base_tokens"].append(0)
+            token_counts["mosaic_tokens"].append(0)
+            token_counts["text_prompt_tokens"].append(0)
             continue
 
         attn, img_pos, mapping_tokens, meta, attention_mask = load_npz(str(npz_path))
         L, S_prompt = attn.shape
 
-        # --- SANITY CHECK: mapping alignment ---
-        expected_img_tokens = len(mapping_tokens)
-
-        if len(img_pos) != expected_img_tokens:
-            # Skip sample if misaligned
-            print(f"[WARN] {qid}: mapping mismatch "
-                f"(len(image_placeholder_positions)={len(img_pos)} "
-                f"!= len(mapping_tokens)={expected_img_tokens}). Skipping.")
+        if L != L_ref:
+            qids_layer_mismatch.append(qid)
+            # append NaNs/zeros so we don't drop the qid
+            for k in legend_names:
+                base_region_curves[k].append(_nan_curve())
+                mosaic_region_curves[k].append(_nan_curve())
+                token_counts["region_tokens_base"][k].append(0)
+                token_counts["region_tokens_mosaic"][k].append(0)
+            base_mass_curves.append(_zero_curve())
+            mosaic_mass_curves.append(_zero_curve())
+            image_mass_curves.append(_zero_curve())
+            text_prompt_mass_curves.append(_zero_curve())
+            token_counts["base_tokens"].append(0)
+            token_counts["mosaic_tokens"].append(0)
+            token_counts["text_prompt_tokens"].append(0)
             continue
 
-        if L_ref is None:
-            L_ref = L
-        elif L != L_ref:
-            # Mixed layer counts would complicate aggregation. Skip mismatched models.
+        # safe align (non-skipping)
+        img_pos2, mapping2, did_truncate, align_info = safe_align_img_pos_and_mapping(img_pos, mapping_tokens)
+        if did_truncate:
+            qids_mapping_mismatch_truncated.append(qid)
+
+        if len(img_pos2) == 0 or len(mapping2) == 0:
+            qids_no_usable_alignment.append(qid)
+            # append NaNs/zeros so we don't drop the qid
+            for k in legend_names:
+                base_region_curves[k].append(_nan_curve())
+                mosaic_region_curves[k].append(_nan_curve())
+                token_counts["region_tokens_base"][k].append(0)
+                token_counts["region_tokens_mosaic"][k].append(0)
+            base_mass_curves.append(_zero_curve())
+            mosaic_mass_curves.append(_zero_curve())
+            image_mass_curves.append(_zero_curve())
+            text_prompt_mass_curves.append(_zero_curve())
+            token_counts["base_tokens"].append(0)
+            token_counts["mosaic_tokens"].append(0)
+            token_counts["text_prompt_tokens"].append(0)
             continue
 
         sample = by_qid[qid]
         regions = build_regions_from_guic(sample, args.variant)
 
-        # Stream token sets + masses
-        base_idxs = stream_prompt_indices(mapping_tokens, img_pos, "base")
-        mosaic_idxs = stream_prompt_indices(mapping_tokens, img_pos, "mosaic")
-        image_idxs = sorted(set(base_idxs).union(mosaic_idxs))
-        text_idxs = text_prompt_indices(S_prompt, img_pos, attention_mask)
+        # Stream indices
+        base_idxs = stream_prompt_indices(mapping2, img_pos2, "base")
+        mosaic_idxs = stream_prompt_indices(mapping2, img_pos2, "mosaic")
+        text_idxs = text_prompt_indices(S_prompt, img_pos2, attention_mask)
 
+        # Mass curves (unconditional)
         p_base = mass_curve(attn, base_idxs)
         p_mosaic = mass_curve(attn, mosaic_idxs)
 
@@ -384,13 +520,14 @@ def main():
         token_counts["mosaic_tokens"].append(len(mosaic_idxs))
         token_counts["text_prompt_tokens"].append(len(text_idxs))
 
-        # Per-region, per-stream ratios (mean of ratios later)
-        for legend_name in ["text region", "correct object region", "misleading object region"]:
+        # density denominators
+        d_base = density_curve(attn, base_idxs)
+        d_mosaic = density_curve(attn, mosaic_idxs)
+
+        for legend_name in legend_names:
             if legend_name not in regions:
-                # If region missing (should not happen for first + last; but be robust)
-                # Add all-NaN curve so sample count stays aligned
-                base_region_curves[legend_name].append(np.full((L,), np.nan, dtype=np.float32))
-                mosaic_region_curves[legend_name].append(np.full((L,), np.nan, dtype=np.float32))
+                base_region_curves[legend_name].append(_nan_curve())
+                mosaic_region_curves[legend_name].append(_nan_curve())
                 token_counts["region_tokens_base"][legend_name].append(0)
                 token_counts["region_tokens_mosaic"][legend_name].append(0)
                 continue
@@ -398,48 +535,41 @@ def main():
             bb = regions[legend_name]
 
             r_base = region_prompt_indices_from_bbox(
-                mapping_tokens, img_pos, bb, stream="base", min_overlap_frac=args.min_overlap_frac
+                mapping2, img_pos2, bb, stream="base", min_overlap_frac=args.min_overlap_frac
             )
             r_mosaic = region_prompt_indices_from_bbox(
-                mapping_tokens, img_pos, bb, stream="mosaic", min_overlap_frac=args.min_overlap_frac
+                mapping2, img_pos2, bb, stream="mosaic", min_overlap_frac=args.min_overlap_frac
             )
 
             token_counts["region_tokens_base"][legend_name].append(len(r_base))
             token_counts["region_tokens_mosaic"][legend_name].append(len(r_mosaic))
 
-            m_base = mass_curve(attn, r_base)
-            m_mosaic = mass_curve(attn, r_mosaic)
+            d_r_base = density_curve(attn, r_base)
+            d_r_mosaic = density_curve(attn, r_mosaic)
 
             base_region_curves[legend_name].append(
-                ratio_curve(m_base, p_base, min_denom=args.min_denom)
+                ratio_curve_with_gate(d_r_base, d_base, p_base, min_gate=args.min_denom)
             )
             mosaic_region_curves[legend_name].append(
-                ratio_curve(m_mosaic, p_mosaic, min_denom=args.min_denom)
+                ratio_curve_with_gate(d_r_mosaic, d_mosaic, p_mosaic, min_gate=args.min_denom)
             )
-
-        used_qids.append(qid)
 
         if args.max_samples and len(used_qids) >= args.max_samples:
             break
 
-    if L_ref is None or len(used_qids) == 0:
-        raise RuntimeError("No samples found/loaded. Check npz_root/variant/qid_file paths.")
-
-    # Stack to arrays: (N, L)
-    N = len(used_qids)
+    # Stack arrays
+    N_total = len(used_qids)
     layers = np.arange(L_ref, dtype=np.int32)
 
     def stack_curves(curve_list: List[np.ndarray]) -> np.ndarray:
         return np.stack(curve_list, axis=0).astype(np.float32)
 
-    # Mean+CI for base conditional curves (mean of ratios)
     base_series = {}
     mosaic_series = {}
-
     n_eff_base = {}
     n_eff_mosaic = {}
 
-    for legend_name in ["text region", "correct object region", "misleading object region"]:
+    for legend_name in legend_names:
         arr_b = stack_curves(base_region_curves[legend_name])    # (N,L)
         arr_m = stack_curves(mosaic_region_curves[legend_name])  # (N,L)
 
@@ -452,7 +582,6 @@ def main():
         n_eff_base[legend_name] = ne_b.tolist()
         n_eff_mosaic[legend_name] = ne_m.tolist()
 
-    # Stream usage means (unconditional)
     base_mass = stack_curves(base_mass_curves)
     mosaic_mass = stack_curves(mosaic_mass_curves)
     image_mass = stack_curves(image_mass_curves)
@@ -467,19 +596,19 @@ def main():
     plot_mean_ci_lines(
         layers,
         base_series,
-        title=f"{args.variant} | base: mean of per-sample p(region | base) (N={N})",
-        ylabel="p(region | base)  (mean of ratios)",
+        title=f"{args.variant} | base: mean of per-sample density_ratio(region/base) (N_total={N_total})",
+        ylabel="(avg attn per region token) / (avg attn per base token)",
         out_path=out_dir / "base_conditional_mean_of_ratios.png",
-        ylim=(0.0, 1.0),
+        ylim=(0.0, 10.0),
     )
 
     plot_mean_ci_lines(
         layers,
         mosaic_series,
-        title=f"{args.variant} | mosaic: mean of per-sample p(region | mosaic) (N={N})",
-        ylabel="p(region | mosaic)  (mean of ratios)",
+        title=f"{args.variant} | mosaic: mean of per-sample density_ratio(region/mosaic) (N_total={N_total})",
+        ylabel="(avg attn per region token) / (avg attn per mosaic token)",
         out_path=out_dir / "mosaic_conditional_mean_of_ratios.png",
-        ylim=(0.0, 1.0),
+        ylim=(0.0, 10.0),
     )
 
     plot_mean_lines(
@@ -490,7 +619,7 @@ def main():
             "mean p(image)": image_mass_mean,
             "mean p(text_prompt)": text_mass_mean,
         },
-        title=f"{args.variant} | stream usage means (N={N})",
+        title=f"{args.variant} | stream usage means (N_total={N_total})",
         ylabel="unconditional attention mass (mean across samples)",
         out_path=out_dir / "stream_usage.png",
         ylim=(0.0, 1.0),
@@ -501,13 +630,30 @@ def main():
         "variant": args.variant,
         "npz_root": str(Path(args.npz_root).resolve()),
         "qid_file": str(Path(args.qid_file).resolve()),
-        "N_used": N,
-        "used_qids_first_20": used_qids[:20],
+        "N_total_whitelist_used_for_arrays": N_total,
+        "L_ref": int(L_ref),
+        "S_ref_from_first_npz": int(S_ref) if S_ref is not None else None,
+        "first_npz_qid_used_for_ref": first_npz_qid,
         "settings": {
             "min_overlap_frac": float(args.min_overlap_frac),
             "min_denom": float(args.min_denom),
             "ci": float(args.ci),
-            "aggregation": "mean of per-sample ratios (nanmean), CI from nanpercentile",
+            "aggregation": "mean of per-sample ratios (nanmean), CI from nanpercentile; missing/invalid qids contribute NaNs (non-skipping)",
+            "region_metric": "density_ratio = (avg attn per region token) / (avg attn per stream token)",
+            "gating": "gate uses stream attention MASS (p_base/p_mosaic) and NaNs when < min_denom",
+            "mapping_mismatch_policy": "truncate to common prefix K and filter mapping_tokens to token_idx<K",
+        },
+        "non_skipping_buckets": {
+            "n_missing_npz": len(qids_missing_npz),
+            "n_missing_guic": len(qids_missing_guic),
+            "n_layer_mismatch": len(qids_layer_mismatch),
+            "n_mapping_mismatch_truncated": len(qids_mapping_mismatch_truncated),
+            "n_no_usable_alignment": len(qids_no_usable_alignment),
+            "qids_missing_npz_first_50": qids_missing_npz[:50],
+            "qids_missing_guic_first_50": qids_missing_guic[:50],
+            "qids_layer_mismatch_first_50": qids_layer_mismatch[:50],
+            "qids_mapping_mismatch_truncated_first_50": qids_mapping_mismatch_truncated[:50],
+            "qids_no_usable_alignment_first_50": qids_no_usable_alignment[:50],
         },
         "token_count_stats": {
             "base_tokens": {
@@ -527,17 +673,18 @@ def main():
             },
         },
         "n_effective_per_layer": {
-            "base": n_eff_base,      # how many samples had denom>=min_denom at each layer
+            "base": n_eff_base,
             "mosaic": n_eff_mosaic,
         },
         "outputs": {
             "base_conditional_mean_of_ratios": "base_conditional_mean_of_ratios.png",
             "mosaic_conditional_mean_of_ratios": "mosaic_conditional_mean_of_ratios.png",
             "stream_usage": "stream_usage.png",
+            "report": "report.json",
         },
     }
-    (out_dir / "report.json").write_text(json.dumps(report, indent=2))
 
+    (out_dir / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
 

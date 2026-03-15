@@ -7,7 +7,7 @@
 #SBATCH --mem=60G
 #SBATCH --cpus-per-task=16
 #SBATCH -t 24:00:00
-#SBATCH --job-name=attention_weights
+#SBATCH --job-name=attention_weights_full_prompt
 #SBATCH --output=jobs_logs/%x_%j.out
 #SBATCH --error=jobs_logs/%x_%j.err
 
@@ -21,8 +21,8 @@ cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attent
 nvidia-smi
 
 model="llava-next"
-output_dir="./${model}_attentions"
-start=200
+output_dir="./${model}_image2image_attentions"
+start=0
 end=500
 
 
@@ -36,14 +36,13 @@ echo "----------------------------------------"
 START_TIME=$(date +%s)
 
 for variant in notext correct_answer misleading_groundable misleading_ungroundable irrelevant_word; do
-    python -u attention_output_prompt.py \
+    python -u attention_full_prompt.py \
         --variant "$variant" \
         --out_dir "${output_dir}/${variant}" \
         --shuffle_options \
         --include_newline_tokens \
         --start $start \
-        --end $end \
-        > logs/ig_${variant}_${start}_${end}.log
+        --end $end 
 done
 
 
@@ -63,5 +62,5 @@ fi
 
 echo ""
 echo "================================================"
-echo "Occlusion finished at $(date)"
+echo "Attention weights calculation finished at $(date)"
 echo "Results saved in: $output_dir"
