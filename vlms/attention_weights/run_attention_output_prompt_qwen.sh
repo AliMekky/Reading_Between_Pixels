@@ -62,5 +62,5 @@ fi
 
 echo ""
 echo "================================================"
-echo "Occlusion finished at $(date)"
+echo "Attention finished at $(date)"
 echo "Results saved in: $output_dir"

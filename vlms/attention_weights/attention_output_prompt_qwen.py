@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
-# cache_generated_token_attn_with_mapping_npz_qwen.py
+# cache_generated_token_attn_with_mapping_npz_qwen_two_models.py
 """
-Generation-step attention caching for Qwen2-VL / Qwen2.5-VL, aligned with the Qwen IG script.
+Generation-step attention caching for Qwen2-VL / Qwen2.5-VL
+using TWO MODELS:
 
-What it does
-- Loads HF dataset samples filtered by question_id list
-- Builds the same MCQ prompt as your evaluator
-- Uses Qwen chat template with one image + text prompt
-- Runs a manual 2-step decode:
-    1) prefill on the prompt
-    2) one greedy decode step with attentions
-- Extracts per-layer head-averaged attention from the generated token -> prompt tokens only
-- Builds Qwen image-token mapping from image_grid_thw / patch_size / merge_size
-- Saves everything into one compressed NPZ per sample
+1) Prediction model:
+   - loaded EXACTLY like your current inference-style path
+   - used only to choose the greedy next token
+
+2) Attention model:
+   - loaded separately with eager attention
+   - used only for manual prefill + one-step decode with output_attentions=True
+
+Why this version exists
+- Your current Qwen setup produces sensible next-token logits,
+  but returns None attentions on the decode step.
+- This script preserves your current prediction model loading,
+  while extracting attentions from a separate model/backend that is more likely
+  to return real tensors.
 
 Saved NPZ fields
-- attn                     : (L, S_prompt) float16
-- meta                     : json string
-- packed_mapping_summary   : json string
-- packed_mapping_tokens    : json string
+- attn                        : (L, S_prompt) float16
+- meta                        : json string
+- packed_mapping_summary      : json string
+- packed_mapping_tokens       : json string
 - image_placeholder_positions : int32 array
-- prompt_input_ids         : int32 array
-- attention_mask           : int32 array (if present)
+- prompt_input_ids            : int32 array
+- attention_mask              : int32 array (if present)
 
 Notes
-- Mapping is for Qwen merged image tokens (<|image_pad|> positions only).
-- One image token corresponds to one merged patch block on the resized patch grid.
+- The saved attention corresponds to the token chosen by the prediction model.
+- The attention itself is extracted from the separate attention model.
 """
 
 import json
@@ -41,6 +46,44 @@ from PIL import Image
 
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 from qwen_vl_utils import process_vision_info
+
+
+# -----------------------------
+# Answer extraction
+# -----------------------------
+def extract_answer_letter(response: str) -> str:
+    import re
+
+    assistant_response = response
+    markers = ["ASSISTANT:", "Assistant:", "assistant:"]
+    last_position = -1
+    found_marker = None
+
+    for marker in markers:
+        pos = response.rfind(marker)
+        if pos > last_position:
+            last_position = pos
+            found_marker = marker
+
+    if found_marker:
+        assistant_response = response[last_position + len(found_marker):].strip()
+
+    assistant_response_upper = assistant_response.upper()
+
+    patterns = [
+        r"ANSWER[:\s]+([ABCD])\b",
+        r"^\s*([ABCD])\s*$",
+        r"^([ABCD])\b",
+        r"\b([ABCD])\s*$",
+        r"\b([ABCD])\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, assistant_response_upper)
+        if match:
+            return match.group(1)
+
+    return "UNKNOWN"
 
 
 # -----------------------------
@@ -161,11 +204,40 @@ def prepare_qwen_inputs(processor, image: Image.Image, prompt_text: str):
 
 
 # -----------------------------
+# Debug helpers
+# -----------------------------
+def debug_print_prompt_and_tokens(processor, inputs, formatted_prompt: str, max_tokens_to_show: int = 120):
+    tokenizer = processor.tokenizer
+    input_ids = inputs["input_ids"][0].tolist()
+    toks = tokenizer.convert_ids_to_tokens(input_ids)
+
+    print("\n=== FORMATTED PROMPT ===")
+    print(formatted_prompt)
+    print("========================")
+    print(f"Prompt seq_len = {len(input_ids)}")
+    print(f"First {min(max_tokens_to_show, len(toks))} prompt tokens:")
+    print(toks[:max_tokens_to_show])
+    print()
+
+
+def debug_print_topk_next_tokens(logits: torch.Tensor, tokenizer, k: int = 10):
+    scores = logits[0, -1]
+    topk_vals, topk_ids = torch.topk(scores, k=k, dim=-1)
+
+    print(f"Top-{k} next-token candidates from prefill:")
+    for rank, (tid, val) in enumerate(zip(topk_ids.tolist(), topk_vals.tolist()), start=1):
+        tok_str = tokenizer.decode([tid], skip_special_tokens=False)
+        print(f"  {rank:02d}. id={tid:<6d} token={tok_str!r:<12} logit={val:.4f}")
+    print()
+
+
+# -----------------------------
 # Image placeholder positions
 # -----------------------------
 def get_image_placeholder_positions(processor, input_ids: torch.Tensor) -> List[int]:
     image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
     pos = (input_ids[0] == image_token_id).nonzero(as_tuple=True)[0]
+    print(f"Found {len(pos)} image placeholder positions at indices: {pos.tolist()}")
     return pos.tolist()
 
 
@@ -179,10 +251,6 @@ def build_qwen_image_token_map_for_one_image(
     patch_size: int,
     merge_size: int,
 ) -> Dict[str, Any]:
-    """
-    Builds mapping from Qwen image token index -> merged patch region.
-    bbox format matches your other scripts: (y0, x0, y1, x1) in original image coordinates.
-    """
     orig_w, orig_h = image.size
     T, H, W = image_grid_thw
 
@@ -248,32 +316,61 @@ def build_qwen_image_token_map_for_one_image(
 
 
 # -----------------------------
-# Generation-step attention extraction (manual 2-step version)
+# Prediction model: choose token
 # -----------------------------
 @torch.no_grad()
-def next_token_attn_to_prompt(model, processor, inputs):
-    S_prompt = int(inputs["input_ids"].shape[1])
+def choose_next_token_with_pred_model(pred_model, processor, pred_inputs, debug_topk: int = 10):
+    out0 = pred_model(
+        **pred_inputs,
+        use_cache=True,
+        output_attentions=False,
+        return_dict=True,
+    )
 
-    # 1) Prefill pass
-    out0 = model(
-        **inputs,
+    debug_print_topk_next_tokens(out0.logits, processor.tokenizer, k=debug_topk)
+
+    next_id = out0.logits[:, -1].argmax(dim=-1, keepdim=True)
+
+    token_id = int(next_id[0, 0].item())
+    token_text = processor.tokenizer.decode([token_id], skip_special_tokens=False)
+    pred_letter = extract_answer_letter(token_text)
+
+    print(f"Greedy next token from prediction model: id={token_id} text={token_text!r}")
+    print(f"Parsed predicted answer letter from single token: {pred_letter!r}")
+    print()
+
+    return next_id, token_id, token_text, pred_letter
+
+
+# -----------------------------
+# Attention model: manual prefill + forced one-step decode
+# -----------------------------
+@torch.no_grad()
+def attention_for_forced_token(attn_model, processor, attn_inputs, forced_next_id):
+    """
+    attn_inputs must already be on attn_model device.
+    forced_next_id must already be on attn_model device.
+    """
+    S_prompt = int(attn_inputs["input_ids"].shape[1])
+
+    out0 = attn_model(
+        **attn_inputs,
         use_cache=True,
         output_attentions=False,
         return_dict=True,
     )
     past = out0.past_key_values
 
-    # greedy next token
-    next_id = out0.logits[:, -1].argmax(dim=-1, keepdim=True)
-
-    # 2) One decode step with attentions
-    if "attention_mask" in inputs:
-        attn_mask2 = torch.cat([inputs["attention_mask"], torch.ones_like(next_id)], dim=1)
+    if "attention_mask" in attn_inputs:
+        attn_mask2 = torch.cat(
+            [attn_inputs["attention_mask"], torch.ones_like(forced_next_id)],
+            dim=1,
+        )
     else:
         attn_mask2 = None
 
-    out1 = model(
-        input_ids=next_id,
+    out1 = attn_model(
+        input_ids=forced_next_id,
         attention_mask=attn_mask2,
         past_key_values=past,
         use_cache=True,
@@ -281,35 +378,34 @@ def next_token_attn_to_prompt(model, processor, inputs):
         return_dict=True,
     )
 
-    step_attn = out1.attentions  # tuple(L) of (B,H,1,S_so_far)
+    step_attn = out1.attentions
+    if step_attn is None:
+        raise RuntimeError("Attention model returned no attentions.")
+
+    print("Attention tensor shapes by layer:")
+    for li, layer_attn in enumerate(step_attn):
+        if layer_attn is None:
+            print(f"  layer {li}: None")
+        else:
+            print(f"  layer {li}: {tuple(layer_attn.shape)}")
+    print()
 
     layer_vecs = []
     S_so_far_ref = None
+
     for layer_attn in step_attn:
         if layer_attn is None:
-            raise RuntimeError("Found None attention tensor.")
+            raise RuntimeError("Found None attention tensor in attention model.")
         S_so_far = int(layer_attn.shape[-1])
         if S_so_far_ref is None:
             S_so_far_ref = S_so_far
-        v = layer_attn[0].mean(dim=0)[0]   # (S_so_far,)
-        layer_vecs.append(v[:S_prompt])    # prompt-only slice
+        v = layer_attn[0].mean(dim=0)[0]
+        layer_vecs.append(v[:S_prompt])
 
-    A = torch.stack(layer_vecs, dim=0)  # (L, S_prompt)
+    A = torch.stack(layer_vecs, dim=0)
     attn_np = A.to(torch.float16).cpu().numpy()
 
-    gen_token_id = int(next_id[0, 0].item())
-    tok = getattr(processor, "tokenizer", None)
-    gen_token_text = tok.decode([gen_token_id], skip_special_tokens=False) if tok else str(gen_token_id)
-
-    info = {
-        "num_layers": int(A.shape[0]),
-        "prompt_seq_len": int(S_prompt),
-        "attn_seq_len_so_far": int(S_so_far_ref),
-        "generated_token_id": gen_token_id,
-        "generated_token_text": gen_token_text,
-        "max_new_tokens": 1,
-    }
-    return attn_np, info
+    return attn_np, int(S_so_far_ref)
 
 
 # -----------------------------
@@ -347,6 +443,9 @@ def save_npz_sample(
     np.savez_compressed(str(npz_path), **save_dict)
 
 
+# -----------------------------
+# Main
+# -----------------------------
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-VL-7B-Instruct")
@@ -355,14 +454,17 @@ def main():
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--variant", type=str, default="misleading_groundable")
     parser.add_argument("--qid_file", type=str, default="../inference/no_overlap_question_ids.txt")
-    parser.add_argument("--out_dir", type=str, default="attn_cache_gen_qwen")
+    parser.add_argument("--out_dir", type=str, default="qwen-vl_attentions")
     parser.add_argument("--max_samples", type=int, default=0)
+
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
+    parser.add_argument("--attn_device", type=str, default="cpu", choices=["cuda", "cpu"])
 
     parser.add_argument("--shuffle_options", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
 
     parser.add_argument("--debug_first_only", action="store_true")
+    parser.add_argument("--debug_topk", type=int, default=10)
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--end", type=int, default=500)
     args = parser.parse_args()
@@ -374,17 +476,29 @@ def main():
     if isinstance(ds, DatasetDict):
         ds = ds[args.split]
 
-    device = args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu"
-    device_t = torch.device(device)
+    pred_device = args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu"
+    attn_device = args.attn_device if torch.cuda.is_available() and args.attn_device == "cuda" else "cpu"
 
-    print(f"Loading model: {args.model_id} on {device}")
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    pred_device_t = torch.device(pred_device)
+    attn_device_t = torch.device(attn_device)
+
+    print(f"Loading prediction model: {args.model_id} on {pred_device}")
+    print("Prediction model loading is kept unchanged.")
+    pred_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         args.model_id,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        attn_implementation="eager",
+        dtype=torch.float16,
+        device_map="auto"
+    )
+    pred_model.eval()
+
+    print(f"Loading attention model: {args.model_id} on {attn_device}")
+    attn_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        args.model_id,
+        torch_dtype=torch.float32,
         device_map=None,
-    ).to(device_t)
-    model.eval()
+        attn_implementation="eager",
+    ).to(attn_device_t)
+    attn_model.eval()
 
     processor = AutoProcessor.from_pretrained(args.model_id)
 
@@ -399,7 +513,7 @@ def main():
     mismatch_log = out_root / "mismatched_qids.txt"
 
     kept = 0
-    for i in tqdm(range(len(ds)), desc=f"Caching gen-token attn [Qwen] [{args.variant}]"):
+    for i in tqdm(range(len(ds)), desc=f"Caching gen-token attn [Qwen-2models] [{args.variant}]"):
         if args.start > 0 and i < args.start:
             continue
         if args.end > 0 and i >= args.end:
@@ -412,7 +526,6 @@ def main():
         if qid in existing_qid_dirs:
             continue
 
-        # choose image variant
         if args.variant == "notext":
             img = sample["notext"]["image"]
         else:
@@ -421,29 +534,40 @@ def main():
             img = sample[args.variant]["image"]
         img = img.convert("RGB")
 
-        # build prompt
         options, correct_letter, option_meta = build_options_from_sample(
             sample, shuffle=args.shuffle_options, seed=args.seed
         )
         prompt_text = format_mcq_prompt(sample.get("question", ""), options)
 
-        inputs, formatted_prompt, _ = prepare_qwen_inputs(processor, img, prompt_text)
-        inputs = {k: v.to(device_t) for k, v in inputs.items()}
+        base_inputs, formatted_prompt, _ = prepare_qwen_inputs(processor, img, prompt_text)
+        debug_print_prompt_and_tokens(processor, base_inputs, formatted_prompt)
 
-        # attention
-        attn_np, gen_info = next_token_attn_to_prompt(model, processor, inputs)
+        # prediction inputs
+        pred_inputs = {k: v.to(pred_device_t) for k, v in base_inputs.items()}
 
-        # placeholders
-        input_ids = inputs["input_ids"]
-        img_pos = get_image_placeholder_positions(processor, input_ids)
+        # choose token with prediction model
+        next_id_pred, token_id, token_text, pred_letter = choose_next_token_with_pred_model(
+            pred_model,
+            processor,
+            pred_inputs,
+            debug_topk=args.debug_topk,
+        )
 
-        # mapping prerequisites
-        if "image_grid_thw" not in inputs:
+        # placeholder positions from original/base inputs
+        img_pos = get_image_placeholder_positions(processor, base_inputs["input_ids"])
+
+        # mapping prerequisites from original/base inputs
+        if "image_grid_thw" not in base_inputs:
             raise RuntimeError("Processor did not return image_grid_thw; Qwen mapping requires it.")
 
-        grid = tuple(int(x) for x in inputs["image_grid_thw"][0].tolist())
+        grid = tuple(int(x) for x in base_inputs["image_grid_thw"][0].tolist())
         patch_size = int(processor.image_processor.patch_size)
         merge_size = int(processor.image_processor.merge_size)
+
+        print(f"image_grid_thw: {grid}")
+        print(f"patch_size: {patch_size}")
+        print(f"merge_size: {merge_size}")
+        print()
 
         packed_mapping = build_qwen_image_token_map_for_one_image(
             image=img,
@@ -461,10 +585,26 @@ def main():
             )
             append_line(mismatch_log, qid)
 
+        # attention inputs on separate model/device
+        attn_inputs = {k: v.to(attn_device_t) for k, v in base_inputs.items()}
+        forced_next_id = next_id_pred.to(attn_device_t)
+
+        try:
+            attn_np, S_so_far_ref = attention_for_forced_token(
+                attn_model,
+                processor,
+                attn_inputs,
+                forced_next_id,
+            )
+        except Exception as e:
+            print(f"[{qid}] ERROR during attention extraction: {e}")
+            append_line(mismatch_log, qid)
+            continue
+
         meta = {
             "question_id": qid,
             "variant": args.variant,
-            "prompt_seq_len": int(input_ids.shape[1]),
+            "prompt_seq_len": int(base_inputs["input_ids"].shape[1]),
             "image_placeholder_count": int(len(img_pos)),
             "expected_packed_image_tokens": int(expected_img_tokens),
             "mapping_mismatch": bool(mapping_mismatch),
@@ -475,11 +615,19 @@ def main():
             "merge_size": merge_size,
             "original_image_size_hw": [img.height, img.width],
             "formatted_prompt": formatted_prompt,
-            **gen_info,
+            "prediction_model_device": pred_device,
+            "attention_model_device": attn_device,
+            "attention_model_attn_impl": "eager",
+            "num_layers": int(attn_np.shape[0]),
+            "attn_seq_len_so_far": int(S_so_far_ref),
+            "generated_token_id": int(token_id),
+            "generated_token_text": token_text,
+            "predicted_answer_letter": pred_letter,
+            "max_new_tokens": 1,
         }
 
-        prompt_input_ids = input_ids[0].detach().cpu().numpy()
-        attention_mask = inputs["attention_mask"][0].detach().cpu().numpy() if "attention_mask" in inputs else None
+        prompt_input_ids = base_inputs["input_ids"][0].detach().cpu().numpy()
+        attention_mask = base_inputs["attention_mask"][0].detach().cpu().numpy() if "attention_mask" in base_inputs else None
 
         save_npz_sample(
             args.out_dir,
@@ -503,7 +651,7 @@ def main():
             break
 
     print(f"Done. Saved {kept} samples into: {args.out_dir}")
-    print(f"Mismatches (if any) logged to: {mismatch_log}")
+    print(f"Mismatches / failures logged to: {mismatch_log}")
 
 
 if __name__ == "__main__":

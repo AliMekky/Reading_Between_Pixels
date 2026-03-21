@@ -1281,14 +1281,52 @@ def overlap_frac_yxyx(a, b) -> float:
     return float(inter / at)
 
 
-def get_stream_token_indices(mapping_tokens: List[dict]) -> Tuple[np.ndarray, np.ndarray]:
-    base, mosaic = [], []
-    for t in mapping_tokens:
-        if t.get("kind") == "base_patch":
-            base.append(int(t["token_idx"]))
-        elif t.get("kind") == "mosaic_patch":
-            mosaic.append(int(t["token_idx"]))
-    return np.asarray(base, dtype=np.int64), np.asarray(mosaic, dtype=np.int64)
+def infer_stream_names(mapping_tokens: List[dict]) -> List[str]:
+    kinds = {t.get("kind") for t in mapping_tokens}
+
+    if "merged_patch" in kinds:
+        return ["merged"]
+
+    has_base = "base_patch" in kinds
+    has_mosaic = "mosaic_patch" in kinds
+
+    streams = []
+    if has_base:
+        streams.append("base")
+    if has_mosaic:
+        streams.append("mosaic")
+    return streams
+
+
+def get_stream_token_indices(mapping_tokens: List[dict]) -> Dict[str, np.ndarray]:
+    kinds = {t.get("kind") for t in mapping_tokens}
+
+    if "merged_patch" in kinds:
+        merged = [
+            int(t["token_idx"])
+            for t in mapping_tokens
+            if t.get("kind") == "merged_patch"
+        ]
+        return {"merged": np.asarray(merged, dtype=np.int64)}
+
+    out = {}
+    base = [
+        int(t["token_idx"])
+        for t in mapping_tokens
+        if t.get("kind") == "base_patch"
+    ]
+    mosaic = [
+        int(t["token_idx"])
+        for t in mapping_tokens
+        if t.get("kind") == "mosaic_patch"
+    ]
+
+    if len(base) > 0:
+        out["base"] = np.asarray(base, dtype=np.int64)
+    if len(mosaic) > 0:
+        out["mosaic"] = np.asarray(mosaic, dtype=np.int64)
+
+    return out
 
 
 def get_region_token_mask(
@@ -1331,15 +1369,20 @@ def extract_density_ratio_region_given_stream(
     L = attn.shape[0]
     token_scores = attn[:, img_pos]  # (L, N_img)
 
-    base_idx, mosaic_idx = get_stream_token_indices(mapping_tokens)
-    out = {"base": {}, "mosaic": {}}
+    # base_idx, mosaic_idx = get_stream_token_indices(mapping_tokens)
+    # out = {"base": {}, "mosaic": {}}
+
+    stream_to_idx = get_stream_token_indices(mapping_tokens)
+    out = {stream: {} for stream in stream_to_idx.keys()}
+
+
 
     region_masks = {
         name: get_region_token_mask(mapping_tokens, bb, min_overlap_frac=min_overlap_frac)
         for name, bb in regions_yxyx.items()
     }
 
-    for stream, idx in (("base", base_idx), ("mosaic", mosaic_idx)):
+    for stream, idx in stream_to_idx.items():
         if idx.size == 0:
             for rname in regions_yxyx.keys():
                 out[stream][rname] = np.full((L,), np.nan, dtype=np.float32)
@@ -1402,8 +1445,8 @@ def is_fooled(meta: Dict[str, Any], meta_n: Dict[str, Any], variant: str) -> boo
     pk = pred_key_from_meta(meta)
     # pk = parse_pred_letter(meta)
 
-    if (pk != correct) and (pn == correct):
-        print(f"qid = {meta.get('question_id')} meta variant={meta.get('variant')} pred_letter={pred_letter} correct={correct} pk={pk} pn={pn}")
+    # if (pk != correct) and (pn == correct):
+        # print(f"qid = {meta.get('question_id')} meta variant={meta.get('variant')} pred_letter={pred_letter} correct={correct} pk={pk} pn={pn}")
     return (pred_letter != correct) and (pn == correct) and (pk == variant)
 
 def is_robust(meta: Dict[str, Any], meta_n: Dict[str, Any], variant: str) -> bool:
@@ -1415,13 +1458,23 @@ def is_robust(meta: Dict[str, Any], meta_n: Dict[str, Any], variant: str) -> boo
     return (pred_letter_v == correct) and (pred_letter_n == correct)
 
 def is_wrongly_consistent(meta: Dict[str, Any], meta_n: Dict[str, Any], variant: str) -> bool:
+    # print(meta)
+    # print('---')
+    # print(meta_n)
+    # print('---')
+    for k, v in meta['option_meta']['label_to_key'].items():
+        if v == "misleading_groundable":
+            misleading_groundable_letter = k
+
+    
     correct = meta["correct_letter"]
     pred_letter_v = parse_pred_letter(meta)
     pred_letter_n = parse_pred_letter(meta_n)
-    print(f"qid = {meta.get('question_id')} meta variant={meta.get('variant')} pred_letter_v={pred_letter_v} pred_letter_n={pred_letter_n} correct={correct}")
+    print(meta)
+    # print(f"qid = {meta.get('question_id')} meta variant={meta.get('variant')} pred_letter_v={pred_letter_v} pred_letter_n={pred_letter_n} correct={correct}")
     if pred_letter_v is None or pred_letter_n is None or correct is None:
         return False
-    return (pred_letter_v != correct) and (pred_letter_n != correct)
+    return (pred_letter_v != correct) and (pred_letter_n != correct) and (pred_letter_v == misleading_groundable_letter)
 
 
 def is_helped(meta_v: Dict[str, Any], meta_n: Dict[str, Any]) -> bool:
@@ -1470,7 +1523,7 @@ def plot_three_lines_with_ci(
 # -------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--npz_root", type=str, default="/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/llava-next_attentions")
+    parser.add_argument("--npz_root", type=str, default="/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/qwen-vl_attentions")
     parser.add_argument("--hf_dataset", type=str, default="AHAAM/GUIC")
     parser.add_argument("--hf_cache_dir", type=str, default="../integrated_gradients/hf_dataset_GUIC")
     parser.add_argument("--split", type=str, default="test")
@@ -1479,15 +1532,15 @@ def main():
         "--variant",
         type=str,
         default="misleading_ungroundable",
-        choices=["correct_answer", "misleading_groundable", "misleading_ungroundable", "irrelevant_word"],
+        choices=["misleading_groundable", "misleading_groundable", "misleading_ungroundable", "irrelevant_word"],
     )
     parser.add_argument(
         "--qid_file",
         type=str,
-        default="",
+        default="../inference/no_overlap_question_ids.txt",
         help="Whitelist (one qid per line). If empty, qids are taken from variant NPZ directory.",
     )
-    parser.add_argument("--out_dir", type=str, default="plots_subset_noskip")
+    parser.add_argument("--out_dir", type=str, default="qwen_plots")
 
     parser.add_argument("--min_overlap_frac", type=float, default=0.25)
     parser.add_argument("--min_denom", type=float, default=1e-4)
@@ -1496,7 +1549,7 @@ def main():
     parser.add_argument(
         "--subset",
         type=str,
-        default="wrongly_consistent",
+        default="fooled",
         choices=["helped", "fooled", "all", "robust", "wrongly_consistent"],
         help="Which subset to aggregate. Non-selected qids are kept as all-NaN (no skip).",
     )
@@ -1524,6 +1577,8 @@ def main():
         qids = sorted([p.name for p in var_dir.iterdir() if p.is_dir()])
         qid_source = "variant_dir"
 
+
+    streams = None
     # Establish L_ref by scanning for first available pair with valid shapes
     L_ref: Optional[int] = None
     for qid in qids:
@@ -1533,6 +1588,8 @@ def main():
             continue
         try:
             dv = load_npz(pv)
+            if streams is None:
+                streams = infer_stream_names(dv["mapping_tokens"])
             dn = load_npz(pn)
             L_ref = int(dv["attn"].shape[0])
             if int(dn["attn"].shape[0]) != L_ref:
@@ -1542,12 +1599,13 @@ def main():
         except Exception:
             continue
 
+
     if L_ref is None:
         raise RuntimeError("Could not infer L_ref from any available (variant, notext) NPZ pair.")
 
     layers = np.arange(L_ref, dtype=int)
     region_names = ["text region", "correct object region", "misleading object region"]
-    streams = ["base", "mosaic"]
+    # streams = ["base", "mosaic"]
 
     def nan_vec():
         return np.full((L_ref,), np.nan, dtype=np.float32)
@@ -1600,7 +1658,9 @@ def main():
         except Exception:
             counts["npz_load_error"] += 1
             for s in streams:
+                print(s)
                 for r in region_names:
+                    print(r)
                     store_V[s][r].append(nan_vec())
                     store_N[s][r].append(nan_vec())
             selected_mask.append(False)
@@ -1659,7 +1719,6 @@ def main():
         elif args.subset == "robust":
             is_selected = is_robust(dv["meta"], dn["meta"], args.variant)
         elif args.subset == "wrongly_consistent":
-            print("here")
             is_selected = is_wrongly_consistent(dv["meta"], dn["meta"], args.variant)
         else:  # helped
             is_selected = is_helped(dv["meta"], dn["meta"])
