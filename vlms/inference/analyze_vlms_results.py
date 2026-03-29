@@ -23,6 +23,7 @@ import seaborn as sns
 from pathlib import Path
 from datasets import load_dataset, load_from_disk, DatasetDict
 from PIL import Image, ImageFile
+import numpy as np
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -59,6 +60,29 @@ def get_or_download_hf_dataset(
         print(f"⚠️  Cache save failed: {e}")
     
     return ds
+
+
+def wilson_ci(k, n, z=1.96):
+    """Wilson score interval for a binomial proportion, returned in percent."""
+    if n == 0:
+        return (float("nan"), float("nan"))
+    p = k / n
+    denom = 1 + z**2 / n
+    center = (p + z**2 / (2 * n)) / denom
+    half = z * ((p * (1 - p) + z**2 / (4 * n)) / n) ** 0.5 / denom
+    return 100 * (center - half), 100 * (center + half)
+
+
+def bootstrap_mean_ci(values, n_boot=10000, alpha=0.05, seed=42):
+    """Bootstrap CI for the mean, returned in percent."""
+    values = np.asarray(values, dtype=float)
+    if len(values) == 0:
+        return (float("nan"), float("nan"))
+    rng = np.random.default_rng(seed)
+    boots = rng.choice(values, size=(n_boot, len(values)), replace=True).mean(axis=1)
+    lo = np.percentile(boots, 100 * alpha / 2)
+    hi = np.percentile(boots, 100 * (1 - alpha / 2))
+    return 100 * lo, 100 * hi
 
 def load_hf_dataset_as_dict(hf_dataset):
     """
@@ -133,45 +157,49 @@ def parse_filename(filename):
 
 def calculate_accuracy(results, questions_dict):
     """
-    Calculate accuracy by matching results with original questions
-    
-    Args:
-        results: List of result dicts with 'image_id' and 'predicted_answer'
-        questions_dict: Dict of question data keyed by question_id
-    
+    Calculate accuracy by matching results with original questions.
+
     Returns:
-        dict with accuracy metrics
+        dict with accuracy metrics, confidence intervals, and per-example outcomes.
     """
     total = 0
     correct = 0
-    by_category = defaultdict(lambda: {'correct': 0, 'total': 0})
-    
+    by_category = defaultdict(lambda: {'correct': 0, 'total': 0, 'outcomes': []})
+
     incorrect_samples = []
-    
+    example_outcomes = []
+
     for result in results:
-        # Try multiple possible ID fields
-        # if result['question'] == "What is on the wall?" or result['question'] == "What's on the wall?":
-        #     continue
         qid = result.get('image_id') or result.get('question_id') or result.get('image')
         predicted = result.get('predicted_answer', '').strip().upper()
-        
+
         if qid not in questions_dict:
             print(f"⚠️  Question ID {qid} not found in questions data")
             continue
-        
+
         question = questions_dict.get(qid, {})
         ground_truth = (result.get("correct_answer") or "").strip().upper()
 
-        # GUIC doesn't have category; keep one bucket
         category = "GUIC"
-        
+
+        is_correct = int(predicted == ground_truth)
+
         total += 1
+        correct += is_correct
+
         by_category[category]['total'] += 1
-        
-        if predicted == ground_truth:
-            correct += 1
-            by_category[category]['correct'] += 1
-        else:
+        by_category[category]['correct'] += is_correct
+        by_category[category]['outcomes'].append(is_correct)
+
+        example_outcomes.append({
+            'question_id': qid,
+            'predicted': predicted,
+            'ground_truth': ground_truth,
+            'is_correct': is_correct,
+            'category': category,
+        })
+
+        if not is_correct:
             incorrect_samples.append({
                 'question_id': qid,
                 'question': question.get('question', ''),
@@ -179,26 +207,33 @@ def calculate_accuracy(results, questions_dict):
                 'predicted': predicted,
                 'category': category,
             })
-    
-    # Calculate percentages
+
     overall_acc = (correct / total * 100) if total > 0 else 0
-    
+    overall_ci_low, overall_ci_high = wilson_ci(correct, total)
+
     category_acc = {}
     for cat, stats in by_category.items():
+        acc = (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        ci_low, ci_high = wilson_ci(stats['correct'], stats['total'])
         category_acc[cat] = {
             'correct': stats['correct'],
             'total': stats['total'],
-            'accuracy': (stats['correct'] / stats['total'] * 100) if stats['total'] > 0 else 0
+            'accuracy': acc,
+            'ci_low': ci_low,
+            'ci_high': ci_high,
         }
-    
+
     return {
         'overall': {
             'correct': correct,
             'total': total,
-            'accuracy': overall_acc
+            'accuracy': overall_acc,
+            'ci_low': overall_ci_low,
+            'ci_high': overall_ci_high,
         },
         'by_category': category_acc,
-        'incorrect_samples': incorrect_samples[:20]  # Keep first 20 for analysis
+        'incorrect_samples': incorrect_samples[:20],
+        'example_outcomes': example_outcomes,
     }
 
 def analyze_all_results(results_dir, questions_dict):
@@ -245,9 +280,8 @@ def analyze_all_results(results_dir, questions_dict):
     return all_analyses
 
 def create_summary_tables(all_analyses):
-    """Create summary tables as DataFrames"""
-    
-    # Overall accuracy table
+    """Create summary tables as DataFrames."""
+
     overall_data = []
     for model, variants in all_analyses.items():
         for variant, analysis in variants.items():
@@ -255,13 +289,14 @@ def create_summary_tables(all_analyses):
                 'Model': model,
                 'Variant': variant,
                 'Accuracy (%)': round(analysis['overall']['accuracy'], 2),
+                'CI Lower (%)': round(analysis['overall']['ci_low'], 2),
+                'CI Upper (%)': round(analysis['overall']['ci_high'], 2),
                 'Correct': analysis['overall']['correct'],
                 'Total': analysis['overall']['total']
             })
-    
+
     overall_df = pd.DataFrame(overall_data)
-    
-    # Category accuracy table
+
     category_data = []
     for model, variants in all_analyses.items():
         for variant, analysis in variants.items():
@@ -271,13 +306,65 @@ def create_summary_tables(all_analyses):
                     'Variant': variant,
                     'Category': category,
                     'Accuracy (%)': round(stats['accuracy'], 2),
+                    'CI Lower (%)': round(stats['ci_low'], 2),
+                    'CI Upper (%)': round(stats['ci_high'], 2),
                     'Correct': stats['correct'],
                     'Total': stats['total']
                 })
-    
+
     category_df = pd.DataFrame(category_data)
-    
+
     return overall_df, category_df
+
+def create_accuracy_gap_table(all_analyses, baseline_variant="notext", n_boot=10000, seed=42):
+    """
+    Compute paired accuracy gaps relative to the baseline variant.
+    Gap is defined as:
+        Acc(variant) - Acc(baseline)
+    using paired per-example correctness.
+    """
+    rows = []
+
+    for model, variants in all_analyses.items():
+        if baseline_variant not in variants:
+            continue
+
+        baseline = {
+            x['question_id']: x['is_correct']
+            for x in variants[baseline_variant]['example_outcomes']
+        }
+
+        for variant, analysis in variants.items():
+            if variant == baseline_variant:
+                continue
+
+            current = {
+                x['question_id']: x['is_correct']
+                for x in analysis['example_outcomes']
+            }
+
+            common_ids = sorted(set(baseline.keys()) & set(current.keys()))
+            if not common_ids:
+                continue
+
+            diffs = np.array([current[qid] - baseline[qid] for qid in common_ids], dtype=float)
+
+            gap = diffs.mean() * 100
+            ci_low, ci_high = bootstrap_mean_ci(diffs, n_boot=n_boot, seed=seed)
+
+            rows.append({
+                'Model': model,
+                'Variant': variant,
+                'N Paired': len(common_ids),
+                'Accuracy Gap (%)': round(gap, 2),
+                'CI Lower (%)': round(ci_low, 2),
+                'CI Upper (%)': round(ci_high, 2),
+                'Improved Count': int((diffs > 0).sum()),
+                'Degraded Count': int((diffs < 0).sum()),
+                'Unchanged Count': int((diffs == 0).sum()),
+            })
+
+    return pd.DataFrame(rows)
 
 def plot_category_baseline_comparison(category_df, overall_df, output_dir):
     """
@@ -317,6 +404,7 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
     
     # Create subplots
     fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+
     
 
     # Always flatten safely so each element is a matplotlib Axes
@@ -375,17 +463,26 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
                 if len(variant_data) > 0:
                     x_pos = base_x + (variant_idx * bar_width)
                     acc = variant_data['Accuracy (%)'].values[0]
+                    ci_low = variant_data['CI Lower (%)'].values[0]
+                    ci_high = variant_data['CI Upper (%)'].values[0]
+                    yerr = np.array([[acc - ci_low], [ci_high - acc]])
                     # acc = 0 if variant in ['misleading_groundable', 'misleading_ungroundable', 'correct_answer'] else acc
 
                     if variant not in variant_colors:
                         continue
                     # Plot bar
-                    bar = ax.bar(x_pos, acc, bar_width,
-                               color=variant_colors[variant],
-                               alpha=0.85,
-                               edgecolor='black',
-                               linewidth=1.5,
-                               zorder=3)
+                    # bar = ax.bar(
+                    #     x_pos, acc, bar_width,
+                    #     color=variant_colors[variant],
+                    #     alpha=0.85,
+                    #     edgecolor='black',
+                    #     linewidth=1.5,
+                    #     zorder=3,
+                    #     yerr=yerr,
+                    #     capsize=4,
+                    #     error_kw=dict(elinewidth=1.2, ecolor='black')
+                    # )
+                    bar = ax.bar(x_pos, acc, bar_width, color=variant_colors[variant], alpha=0.85, edgecolor='black', linewidth=1.5, zorder=3)
                     
                     # Add percentage label on top of bar
                     ax.text(x_pos, acc + 2, f'{acc:.1f}%',
@@ -460,7 +557,10 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
         model_centers = [pos + (n_variants * bar_width) / 2 - bar_width / 2 
                         for pos in model_positions]
         ax.set_xticks(model_centers)
-        ax.set_xticklabels(models, fontsize=13, fontweight='bold')
+        # print("MODELSSSS", model_centers)
+        # print("MODEL NAMESSS", models)
+
+        ax.set_xticklabels(['InternVL', 'LLaVA', 'LLaVA-NeXT', 'Qwen-VL'], fontsize=13, fontweight='bold')
         
         # Labels and styling
         ax.set_ylabel('Accuracy (%)', fontsize=14, fontweight='bold')
@@ -502,7 +602,7 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
     
     plt.tight_layout()
     
-    output_path = os.path.join(output_dir, 'category_baseline_comparison.png')
+    output_path = os.path.join(output_dir, 'category_baseline_comparison.pdf')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved: {output_path}")
@@ -602,6 +702,9 @@ def main():
     print()
     print("📈 Creating summary tables...")
     overall_df, category_df = create_summary_tables(all_analyses)
+    gap_df = create_accuracy_gap_table(all_analyses, baseline_variant="notext")
+    gap_df.to_csv(os.path.join(args.output, 'accuracy_gap.csv'), index=False)
+    print(f"✅ Saved accuracy gap table to {args.output}")
     
     # Save tables to CSV
     overall_df.to_csv(os.path.join(args.output, 'overall_accuracy.csv'), index=False)

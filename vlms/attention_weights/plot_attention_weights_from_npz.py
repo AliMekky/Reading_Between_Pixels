@@ -459,12 +459,12 @@ def regenerate_overlays_from_npz(
 # -----------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--npz_root", type=str, default="./qwen-vl_attentions",
+    parser.add_argument("--npz_root", type=str, default="./llava-next_attentions",
                         help="Root containing attention NPZs")
-    parser.add_argument("--variant", type=str, default="correct_answer")
-    parser.add_argument("--qid", type=str, default="02824734",
+    parser.add_argument("--variant", type=str, default="notext")
+    parser.add_argument("--qid", type=str, default="17928859",
                         help="If provided, only process this qid. Otherwise process all qids found under variant.")
-    parser.add_argument("--out_dir", type=str, default="plots_qwen")
+    parser.add_argument("--out_dir", type=str, default="plots")
     parser.add_argument("--hf_dataset", type=str, default="AHAAM/GUIC")
     parser.add_argument("--hf_cache_dir", type=str, default="../integrated_gradients/hf_dataset_GUIC")
     parser.add_argument("--split", type=str, default="test")
