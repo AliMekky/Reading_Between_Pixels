@@ -1119,12 +1119,49 @@ DEFAULT_EXPAND_MIN_PIXELS = 10
 DEFAULT_DILATE_ITERS = 1
 DEFAULT_TOPK_GLOBAL = 50
 
-DEFAULT_OUT_DIR = "./one_question_three_regions_mask_based_strict_sign"
+DEFAULT_OUT_DIR = "./one_question_three_regions_dynamic_tau"
 
 
 # ============================================================
 # Dataset helpers
 # ============================================================
+
+def compute_edge_tau_from_score_map(
+    score_map: np.ndarray,
+    percentile: float = 90.0,
+) -> float:
+    """
+    Compute adaptive edge_tau based on local differences between neighboring tokens.
+    """
+    H, W = score_map.shape
+    diffs = []
+
+    # 8-neighborhood
+    neigh = [
+        (-1, -1), (-1, 0), (-1, 1),
+        ( 0, -1),          ( 0, 1),
+        ( 1, -1), ( 1, 0), ( 1, 1),
+    ]
+
+    for y in range(H):
+        for x in range(W):
+            s = score_map[y, x]
+
+            # skip empty / zero regions (optional but recommended)
+            if s <= 0:
+                continue
+
+            for dy, dx in neigh:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < H and 0 <= nx < W:
+                    s_n = score_map[ny, nx]
+                    if s_n > 0:
+                        diffs.append(abs(float(s) - float(s_n)))
+
+    if len(diffs) == 0:
+        return 0.0
+
+    return float(np.percentile(np.array(diffs, dtype=np.float32), percentile))
 
 def sanitize_repo_id(repo_id: str) -> str:
     return repo_id.replace("/", "__").replace(" ", "_")
@@ -1719,6 +1756,12 @@ def extract_region_from_bbox_dynamic_multiseed_strict(
 
     raw_sign_mask = sign_mask_from_grid(signed_grid, chosen_sign)
     score_map = score_map * raw_sign_mask.astype(np.float32)
+
+    edge_tau = compute_edge_tau_from_score_map(
+    score_map,
+    percentile=90.0   # you can tune this
+    )
+    print(f"[DEBUG] adaptive edge_tau = {edge_tau:.4f}")
 
     global_seeds = get_topk_seed_points(score_map, topk=topk_global)
     seeds_in_box = filter_seeds_by_mask(global_seeds, expanded_mask)

@@ -389,7 +389,7 @@ def nanmean_ci(x: np.ndarray, ci: float = 95.0) -> Tuple[np.ndarray, np.ndarray,
 
 
 def plot_three_lines_with_ci(
-    title: str,
+    # title: str,
     x: np.ndarray,
     series: Dict[str, np.ndarray],        # name -> (N,L)
     out_path: Path,
@@ -403,7 +403,7 @@ def plot_three_lines_with_ci(
         plt.fill_between(x, lo, hi, alpha=0.2)
     plt.xlabel("layer")
     plt.ylabel(ylabel)
-    plt.title(title)
+    # plt.title(title)
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
@@ -411,7 +411,7 @@ def plot_three_lines_with_ci(
 
 
 def plot_notext_only_with_ci(
-    title: str,
+    # title: str,
     x: np.ndarray,
     series: Dict[str, np.ndarray],        # name -> (N,L)
     out_path: Path,
@@ -425,7 +425,7 @@ def plot_notext_only_with_ci(
         plt.fill_between(x, lo, hi, alpha=0.2)
     plt.xlabel("layer")
     plt.ylabel(ylabel)
-    plt.title(title)
+    # plt.title(title)
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
@@ -437,7 +437,7 @@ def plot_notext_only_with_ci(
 # -------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--npz_root", type=str, default="/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/qwen-vl_attentions")
+    parser.add_argument("--npz_root", type=str, default="/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/llava-next_attentions")
     parser.add_argument("--hf_dataset", type=str, default="AHAAM/GUIC")
     parser.add_argument("--hf_cache_dir", type=str, default="../integrated_gradients/hf_dataset_GUIC")
     parser.add_argument("--split", type=str, default="test")
@@ -454,8 +454,9 @@ def main():
         default="../inference/no_overlap_question_ids.txt",
         help="Whitelist (one qid per line). If empty, qids are taken from variant NPZ directory.",
     )
-    parser.add_argument("--out_dir", type=str, default="qwen_plots")
-
+    parser.add_argument("--out_dir", type=str, default="plots_subset_noskip")
+    # plots_subset_noskip
+    #qwen_plots
     parser.add_argument("--min_overlap_frac", type=float, default=0.25)
     parser.add_argument("--min_denom", type=float, default=1e-4)
     parser.add_argument("--ci", type=float, default=95.0)
@@ -463,7 +464,7 @@ def main():
     parser.add_argument(
         "--subset",
         type=str,
-        default="helped",
+        default="wrongly_consistent",
         choices=["helped", "fooled", "all", "robust", "wrongly_consistent"],
         help="Which subset to aggregate. Non-selected qids are kept as all-NaN (no skip).",
     )
@@ -671,22 +672,22 @@ def main():
     for stream in streams:
         series = {rn: stack(store_V[stream], rn) for rn in region_names}
         plot_three_lines_with_ci(
-            title=f"{args.variant} | {stream.upper()} density_ratio(region/{stream}) | subset={args.subset} (N_total={N}, N_selected={counts['N_selected']})",
+            # title=f"{args.variant} | {stream.upper()} density_ratio(region/{stream}) | subset={args.subset} (N_total={N}, N_selected={counts['N_selected']})",
             x=layers,
             series=series,
             out_path=out_root / f"subset_only_{stream}.png",
-            ylabel=f"(avg attn per region token) / (avg attn per {stream} token)",
+            ylabel=f"(avg attn per token in region) / (avg attn per token in image)",
             ci=args.ci,
         )
 
     for stream in streams:
         series_notext = {rn: stack(store_N[stream], rn) for rn in region_names}
         plot_notext_only_with_ci(
-            title=f"{args.variant} | {stream.upper()} density_ratio(region/{stream}) | NOTEXT only | subset={args.subset} (N_total={N}, N_selected={counts['N_selected']})",
+            # title=f"{args.variant} | {stream.upper()} density_ratio(region/{stream}) | NOTEXT only | subset={args.subset} (N_total={N}, N_selected={counts['N_selected']})",
             x=layers,
             series=series_notext,
             out_path=out_root / f"subset_notext_only_{stream}.png",
-            ylabel=f"(avg attn per region token) / (avg attn per {stream} token)",
+            ylabel=f"(avg attn per token in region) / (avg attn per token in image)",
             ci=args.ci,
         )
 
@@ -697,7 +698,7 @@ def main():
             n0 = stack(store_N[stream], rn)
             series_delta[rn] = v - n0
         plot_three_lines_with_ci(
-            title=f"{args.variant} | {stream.upper()} Δdensity_ratio = variant - notext | subset={args.subset} (paired, NaN-masked)",
+            # title=f"{args.variant} | {stream.upper()} Δdensity_ratio = variant - notext | subset={args.subset} (paired, NaN-masked)",
             x=layers,
             series=series_delta,
             out_path=out_root / f"subset_delta_vs_notext_{stream}.png",
