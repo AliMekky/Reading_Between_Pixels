@@ -465,10 +465,18 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
                     acc = variant_data['Accuracy (%)'].values[0]
                     ci_low = variant_data['CI Lower (%)'].values[0]
                     ci_high = variant_data['CI Upper (%)'].values[0]
-                    yerr = np.array([[acc - ci_low], [ci_high - acc]])
-                    # acc = 0 if variant in ['misleading_groundable', 'misleading_ungroundable', 'correct_answer'] else acc
 
+                    yerr = np.array([[acc - ci_low], [ci_high - acc]])
+                    acc = 0 if variant in ['correct_answer', 'misleading_groundable', 'irrelevant_word', "misleading_ungroundable"] else acc
+                    ci_low = 0 if variant in ['correct_answer', 'misleading_groundable', 'irrelevant_word', "misleading_ungroundable"] else ci_low
+                    ci_high = 0 if variant in ['correct_answer', 'misleading_groundable', 'irrelevant_word', "misleading_ungroundable"] else ci_high
+
+                    yerr = 0 if variant in ['correct_answer', 'misleading_groundable', 'irrelevant_word', "misleading_ungroundable"] else ci_high
+                    
                     if variant not in variant_colors:
+                        continue
+
+                    if variant in ["correct_answer", "misleading_groundable", "irrelevant_word", "misleading_ungroundable"] and acc == 0:
                         continue
                     # Plot bar
                     # bar = ax.bar(
@@ -587,8 +595,8 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
                 Patch(facecolor=variant_colors["irrelevant_word"], label="irrelevant word",
                       edgecolor="black", linewidth=1.5, alpha=0.85),
             ]
-
-            ax.legend(handles=legend_elements, loc="upper right",
+            print(legend_elements)
+            ax.legend(handles=[legend_elements[0]], loc="upper right",
                       fontsize=11, framealpha=0.95, edgecolor="black",
                       fancybox=True, shadow=True)
     
@@ -603,6 +611,7 @@ def plot_category_baseline_comparison(category_df, overall_df, output_dir):
     plt.tight_layout()
     
     output_path = os.path.join(output_dir, 'category_baseline_comparison.pdf')
+    output_path = os.path.join(output_dir, 'category_baseline_comparison.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved: {output_path}")

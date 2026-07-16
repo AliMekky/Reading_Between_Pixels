@@ -37,6 +37,40 @@ from PIL import ImageDraw
 # -----------------------------
 # Visualization helpers
 # -----------------------------
+
+def keep_top_k_within_percentiles(
+    grid: np.ndarray,
+    k: int,
+    clip_percentiles=(5, 95),
+    *,
+    fill_value=0.0,
+):
+    g = grid.astype(np.float32, copy=True)
+    flat = g.reshape(-1)
+
+    lo = np.percentile(flat, clip_percentiles[0])
+    hi = np.percentile(flat, clip_percentiles[1])
+
+    in_band = (flat >= lo) & (flat <= hi) & np.isfinite(flat)
+    idx_band = np.nonzero(in_band)[0]
+
+    if k <= 0 or idx_band.size == 0:
+        mask = np.zeros_like(flat, dtype=bool)
+        return np.full_like(g, fill_value, dtype=np.float32), mask.reshape(g.shape)
+
+    vals_band = flat[idx_band]
+    k_eff = min(k, idx_band.size)
+
+    top_rel = np.argpartition(vals_band, -k_eff)[-k_eff:]
+    keep_idx = idx_band[top_rel]
+
+    mask = np.zeros_like(flat, dtype=bool)
+    mask[keep_idx] = True
+
+    out = np.full_like(flat, fill_value, dtype=np.float32)
+    out[mask] = flat[mask]
+    return out.reshape(g.shape), mask.reshape(g.shape)
+
 def robust_normalize(x, clip_percentiles=(5, 95), signed=False, eps=1e-8):
     x = x.astype(np.float32)
 
@@ -106,11 +140,10 @@ def overlay_grid_block_on_image(
     gh, gw = grid.shape
 
     if show_top_bottom_k and show_top_bottom_k > 0:
-        grid_kept, mask = keep_top_bottom_k_within_percentiles(
+        grid_kept, mask = keep_top_k_within_percentiles(
             grid,
             k=show_top_bottom_k,
             clip_percentiles=clip_percentiles,
-            signed=signed,
             fill_value=0.0,
         )
     else:
@@ -461,8 +494,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--npz_root", type=str, default="./llava-next_attentions",
                         help="Root containing attention NPZs")
-    parser.add_argument("--variant", type=str, default="notext")
-    parser.add_argument("--qid", type=str, default="17928859",
+    parser.add_argument("--variant", type=str, default="misleading_groundable")
+    parser.add_argument("--qid", type=str, default="02548379",
                         help="If provided, only process this qid. Otherwise process all qids found under variant.")
     parser.add_argument("--out_dir", type=str, default="plots")
     parser.add_argument("--hf_dataset", type=str, default="AHAAM/GUIC")
@@ -472,7 +505,7 @@ def main():
     parser.add_argument("--show_top_bottom_k_base", type=int, default=50)
     parser.add_argument("--show_top_bottom_k_mosaic", type=int, default=50)
     parser.add_argument("--show_top_bottom_k_merged", type=int, default=50)
-    parser.add_argument("--clip_lo", type=float, default=5.0)
+    parser.add_argument("--clip_lo", type=float, default=0)
     parser.add_argument("--clip_hi", type=float, default=98.0)
     parser.add_argument("--plot_overlay", action="store_true")
 
