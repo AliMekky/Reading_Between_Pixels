@@ -31,7 +31,7 @@ from datasets import load_dataset, load_from_disk, DatasetDict
 
 import sys
 sys.path.append('/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels')
-from vlms.inference.infere_vlms import get_evaluator
+from Reading_Between_Pixels.vlms.inference.main_files.infere_vlms import get_evaluator
 
 
 
