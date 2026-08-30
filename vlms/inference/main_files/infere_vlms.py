@@ -105,6 +105,7 @@ def compute_token_stats(inputs, tokenizer, image_token_ids=None):
 def build_questions_from_hf_dataset(
     ds,
     variant: str = "notext",
+    image_field: str = "image",
     shuffle_options: bool = True,
     seed: int = 0,
 ) -> List[Dict]:
@@ -162,7 +163,13 @@ def build_questions_from_hf_dataset(
                 if variant not in sample:
                     print(f"Warning: sample {idx} missing '{variant}', skipping. qid={qid}")
                     continue
-                img_obj = sample[variant]["image"]
+                if image_field not in sample[variant]:
+                    print(
+                        f"Warning: sample {idx} variant '{variant}' missing "
+                        f"image field '{image_field}', skipping. qid={qid}"
+                    )
+                    continue
+                img_obj = sample[variant][image_field]
 
             # 5) (Optional but recommended) store mapping for auditing
             option_meta = {
@@ -320,6 +327,7 @@ class BaseVLMEvaluator(ABC):
     def __init__(self, model_id: str, device: str = None):
         self.model_id = model_id
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+        self.logits_dir = "logits_debug"
         
         print(f"Initializing {self.__class__.__name__} on {self.device}...")
         print(f"Loading model: {model_id}")
@@ -400,8 +408,8 @@ class BaseVLMEvaluator(ABC):
         # Save logits for debugging
         tokenizer = getattr(self.processor, "tokenizer", None)
         if tokenizer is not None and sid is not None:
-            os.makedirs("logits_debug", exist_ok=True)
-            debug_path = os.path.join("logits_debug", f"logits_{variant}_{self.model_id.replace('/', '_')}_{sid}.json")
+            os.makedirs(self.logits_dir, exist_ok=True)
+            debug_path = os.path.join(self.logits_dir, f"logits_{variant}_{self.model_id.replace('/', '_')}_{sid}.json")
             save_generation_logits(gen_out, tokenizer, inputs, debug_path)
         
         return response
@@ -884,6 +892,27 @@ def main():
     parser.add_argument('--max_tokens', type=int, default=50)
     parser.add_argument('--device', type=str, choices=['cuda','cpu','auto'], default='cuda')
     parser.add_argument('--list_models', action='store_true')
+    parser.add_argument(
+        '--image_field',
+        choices=['image', 'cleaned_image'],
+        default='image',
+        help="Overlay image field to evaluate; notext always uses its unchanged image field.",
+    )
+    parser.add_argument(
+        '--variants',
+        nargs='+',
+        choices=[
+            'notext',
+            'correct_answer',
+            'misleading_groundable',
+            'misleading_ungroundable',
+            'irrelevant_word',
+        ],
+        default=None,
+        help='Subset of variants to evaluate. Defaults to all five variants.',
+    )
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--logits_dir', default='logits_debug')
 
     args = parser.parse_args()
 
@@ -894,27 +923,60 @@ def main():
             print(f"  {model_type}: {status}")
         return
 
-    device = None if args.device == 'auto' else args.device
-    evaluator = get_evaluator(model_type=args.model_type, model_id=args.model_id, device=device)
-
     # Load HF dataset
     ds = get_or_download_hf_dataset(args.hf_dataset, local_cache_root=args.hf_cache_dir, split="test")
 
-    # Evaluate all 4 variants
-    variants = [
-    "notext",
-    "correct_answer",
-    "misleading_groundable",
-    "misleading_ungroundable",
-    "irrelevant_word",
+    variants = args.variants or [
+        "notext",
+        "correct_answer",
+        "misleading_groundable",
+        "misleading_ungroundable",
+        "irrelevant_word",
     ]
+    if args.image_field == 'cleaned_image' and 'notext' in variants:
+        raise ValueError(
+            "cleaned_image applies only to overlay variants; omit notext because it is unchanged"
+        )
+
+    print("[CONFIG] model_type={}".format(args.model_type))
+    print("[CONFIG] model_id={}".format(args.model_id or MODEL_REGISTRY[args.model_type]['default_model']))
+    print("[CONFIG] dataset={} rows={}".format(args.hf_dataset, len(ds)))
+    print("[CONFIG] image_field={}".format(args.image_field))
+    print("[CONFIG] variants={}".format(variants))
+    print("[CONFIG] seed={} max_tokens={} device={}".format(args.seed, args.max_tokens, args.device))
+    for variant in variants:
+        if variant != 'notext':
+            if variant not in ds.features or args.image_field not in ds.features[variant]:
+                raise ValueError(
+                    "Dataset schema is missing {}.{}".format(variant, args.image_field)
+                )
+    print("[VALIDATION] All requested image fields exist in the dataset schema")
+
+    device = None if args.device == 'auto' else args.device
+    evaluator = get_evaluator(model_type=args.model_type, model_id=args.model_id, device=device)
+    evaluator.logits_dir = args.logits_dir
 
     summary = []
 
     for variant in variants:
         print(f"\n{'='*60}\nEvaluating variant: {variant}\n{'='*60}")
         
-        questions_list = build_questions_from_hf_dataset(ds, variant=variant, shuffle_options=True, seed=42)
+        questions_list = build_questions_from_hf_dataset(
+            ds,
+            variant=variant,
+            image_field=args.image_field,
+            shuffle_options=True,
+            seed=args.seed,
+        )
+        if len(questions_list) != len(ds):
+            raise RuntimeError(
+                "Loaded {}/{} samples for {}; refusing partial evaluation".format(
+                    len(questions_list), len(ds), variant
+                )
+            )
+        print("[VALIDATION] variant={} loaded_samples={}/{}".format(
+            variant, len(questions_list), len(ds)
+        ))
         variant_output = safe_suffix(args.output, variant)
         
         results = evaluate_from_questions_list(
@@ -931,7 +993,9 @@ def main():
             "variant": variant,
             "num_samples": len(results),
             "accuracy_percent": round(acc, 2) if acc is not None else None,
-            "output_file": variant_output
+            "output_file": variant_output,
+            "image_field": args.image_field,
+            "seed": args.seed,
         })
 
     # Save summary
