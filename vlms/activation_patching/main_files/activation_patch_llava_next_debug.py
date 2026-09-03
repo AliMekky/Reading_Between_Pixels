@@ -598,11 +598,36 @@ def summarize_logits(
     correct_letter: str,
     misleading_letter: str,
 ) -> Dict[str, Any]:
-    correct_logit = float(logits[answer_ids[correct_letter]].item())
-    misleading_logit = float(logits[answer_ids[misleading_letter]].item())
+    choice_logits = {
+        letter: float(logits[answer_ids[letter]].item())
+        for letter in ANSWER_LETTERS
+    }
+    require(
+        all(math.isfinite(value) for value in choice_logits.values()),
+        "Found non-finite A-D choice logit",
+    )
+    probability_values = torch.softmax(
+        torch.tensor([choice_logits[letter] for letter in ANSWER_LETTERS], dtype=torch.float64),
+        dim=0,
+    ).tolist()
+    choice_probabilities = {
+        letter: float(probability_values[index])
+        for index, letter in enumerate(ANSWER_LETTERS)
+    }
+    choice_ranking = sorted(
+        ANSWER_LETTERS,
+        key=lambda letter: choice_logits[letter],
+        reverse=True,
+    )
+    choice_ranks = {
+        letter: choice_ranking.index(letter) + 1
+        for letter in ANSWER_LETTERS
+    }
+    correct_logit = choice_logits[correct_letter]
+    misleading_logit = choice_logits[misleading_letter]
     global_id = int(torch.argmax(logits).item())
     global_text = tokenizer.decode([global_id], skip_special_tokens=False)
-    choice_letter = max(ANSWER_LETTERS, key=lambda letter: float(logits[answer_ids[letter]].item()))
+    choice_letter = choice_ranking[0]
     values = [correct_logit, misleading_logit, correct_logit - misleading_logit]
     require(all(math.isfinite(value) for value in values), "Found non-finite target logit or margin")
     return {
@@ -613,7 +638,14 @@ def summarize_logits(
         "global_next_token_text": global_text,
         "global_next_token_letter": parse_answer_letter(global_text),
         "choice_constrained_prediction": choice_letter,
-        "choice_logits": {letter: float(logits[token_id].item()) for letter, token_id in answer_ids.items()},
+        "choice_logits": choice_logits,
+        "choice_probabilities_over_abcd": choice_probabilities,
+        "choice_ranking": choice_ranking,
+        "choice_ranks": choice_ranks,
+        "correct_rank": choice_ranks[correct_letter],
+        "misleading_rank": choice_ranks[misleading_letter],
+        "correct_probability_over_abcd": choice_probabilities[correct_letter],
+        "misleading_probability_over_abcd": choice_probabilities[misleading_letter],
     }
 
 
@@ -625,7 +657,7 @@ def classify_change(
 ) -> str:
     if before_letter != correct_letter and after_letter == correct_letter:
         return "recovery"
-    if before_letter == correct_letter and after_letter == misleading_letter:
+    if before_letter != misleading_letter and after_letter == misleading_letter:
         return "misleading_flip"
     if before_letter != after_letter:
         return "other_flip"
@@ -966,6 +998,13 @@ def main() -> None:
         restoration_change,
     ))
     log("EXPECTED", "Positive restoration effect means movement toward the correct answer")
+    log("CHOICES", "restoration pred={}->{} correct_logit={:.6f}->{:.6f} misleading_logit={:.6f}->{:.6f} correct_rank={}->{} misleading_rank={}->{}".format(
+        overlay_base["choice_constrained_prediction"], restoration["choice_constrained_prediction"],
+        overlay_base["correct_logit"], restoration["correct_logit"],
+        overlay_base["misleading_logit"], restoration["misleading_logit"],
+        overlay_base["correct_rank"], restoration["correct_rank"],
+        overlay_base["misleading_rank"], restoration["misleading_rank"],
+    ))
     log("RESULT", "insertion before_margin={:.6f} after_margin={:.6f} effect={:.6f} before_pred={} after_pred={} outcome={}".format(
         no_text_base["margin_correct_minus_misleading"],
         insertion["margin_correct_minus_misleading"],
@@ -975,11 +1014,19 @@ def main() -> None:
         insertion_change,
     ))
     log("EXPECTED", "Positive insertion effect means movement toward the misleading answer")
+    log("CHOICES", "insertion pred={}->{} correct_logit={:.6f}->{:.6f} misleading_logit={:.6f}->{:.6f} correct_rank={}->{} misleading_rank={}->{}".format(
+        no_text_base["choice_constrained_prediction"], insertion["choice_constrained_prediction"],
+        no_text_base["correct_logit"], insertion["correct_logit"],
+        no_text_base["misleading_logit"], insertion["misleading_logit"],
+        no_text_base["correct_rank"], insertion["correct_rank"],
+        no_text_base["misleading_rank"], insertion["misleading_rank"],
+    ))
 
     report: Dict[str, Any] = {
         "status": "success",
         "milestone": "one_sample_one_layer_text_region",
         "configuration": {
+            "output_schema_version": 2,
             "model_id": args.model_id,
             "requested_model_revision": args.model_revision,
             "model_revision": revision,

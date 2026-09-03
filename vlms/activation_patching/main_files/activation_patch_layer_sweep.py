@@ -267,6 +267,7 @@ def main() -> None:
     require(len(set(answer_ids.values())) == 4, "Answer token IDs are not distinct")
 
     configuration = {
+        "output_schema_version": 2,
         "model_id": args.model_id,
         "requested_model_revision": args.model_revision,
         "model_revision": model_revision,
@@ -291,7 +292,7 @@ def main() -> None:
     checkpoint_match = {
         key: configuration[key]
         for key in (
-            "model_id", "dataset_revision", "question_id", "overlay_image_field",
+            "output_schema_version", "model_id", "dataset_revision", "question_id", "overlay_image_field",
             "variants", "directions", "regions", "layers", "streams",
             "min_overlap_fraction", "seed", "dtype",
         )
@@ -490,6 +491,8 @@ def main() -> None:
                         "patched_margin": patched["margin_correct_minus_misleading"],
                         "recipient_prediction": recipient["choice_constrained_prediction"],
                         "patched_prediction": patched["choice_constrained_prediction"],
+                        "recipient": recipient,
+                        "patched": patched,
                         "outcome": classify_change(
                             recipient["choice_constrained_prediction"],
                             patched["choice_constrained_prediction"],
@@ -503,8 +506,15 @@ def main() -> None:
                         "integrity": integrity,
                     }
                     new_records.append(result)
-                    log("PATCH", "variant={} layer={} direction={} region={} tokens={} effect={:+.6f} outcome={} before_mean={:.6g}".format(
+                    log("PATCH", "variant={} layer={} direction={} region={} tokens={} effect={:+.6f} "
+                        "pred={}->{} correct_logit={:.4f}->{:.4f} misleading_logit={:.4f}->{:.4f} "
+                        "correct_rank={}->{} misleading_rank={}->{} outcome={} before_mean={:.6g}".format(
                         variant, layer_index, direction, region, len(positions), effect,
+                        recipient["choice_constrained_prediction"], patched["choice_constrained_prediction"],
+                        recipient["correct_logit"], patched["correct_logit"],
+                        recipient["misleading_logit"], patched["misleading_logit"],
+                        recipient["correct_rank"], patched["correct_rank"],
+                        recipient["misleading_rank"], patched["misleading_rank"],
                         result["outcome"], integrity["donor_recipient_mean_abs_difference_before"],
                     ))
 
