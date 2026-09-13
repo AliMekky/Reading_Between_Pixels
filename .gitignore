@@ -1,7 +1,90 @@
 old_files/
 SOM/
 unilm/
+# Local credentials and Python/build caches
+.env
+.secrets/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.mypy_cache/
+**/.matplotlib_cache/
+client_secret*.json
+credentials*.json
+token.json
 
+# Scheduler/runtime logs
+**/logs/
+**/jobs_logs/
+**/*.out
+**/*.err
+
+# Model and dataset caches / large generated arrays
+**/hf_cache*/
+**/hf_dataset*/
+**/*.arrow
+**/*.npy
+**/*.npz
+**/*.pt
+**/*.pth
+**/*.safetensors
+**/*.zip
+**/*.jpg
+**/*.jpeg
+**/*.png
+**/*.gif
+**/*.webp
+**/*.pdf
+**/*.csv
+**/*.tsv
+**/*.txt
+**/*.json
+**/*.jsonl
+**/*.ipynb
+**/*.md
+
+# Debug, test, and plotting utilities are kept locally unless explicitly
+# force-added because a main experiment imports them.
+**/plotting_scripts/
+**/test_*.py
+**/*_debug.py
+**/*_debug.sh
+**/*_smoke.sh
+**/*_gate.sh
+**/temp.py
+**/debug_outputs/
+**/.gitkeep
+
+# Local/legacy utilities outside the current Qwen3 experiment release
+google_drive_*.py
+data_filteration/*.py
+data_filteration/*.sh
+scenetap/*.py
+scenetap/scripts/analyze_text.sh
+vlms/activation_patching/main_files/*.py
+vlms/activation_patching/main_files/*.sh
+vlms/activations/extract_activations.sh
+vlms/attention_path_intervention/**
+vlms/correct_overlay_propagation/
+vlms/inference/*.py
+vlms/inference/*.sh
+vlms/inference/main_files/compare_cleaned_accuracy.py
+vlms/inference/main_files/run_cleaned_*.sh
+vlms/occlusion/logs_gqa/
+vlms/probing/*.py
+
+# Optional recovery and superseded discovery utilities
+vlms/open_ended_evaluation/main_files/combine_judge_retries.py
+vlms/open_ended_evaluation/main_files/prepare_judge_retry.py
+vlms/open_ended_evaluation/main_files/resubmit_openai_judge.py
+vlms/qwen3_vl_generation_causal/main_files/analyze_step4_*.py
+vlms/qwen3_vl_generation_causal/main_files/analyze_step5*.py
+vlms/qwen3_vl_generation_causal/main_files/audit_*.py
+vlms/qwen3_vl_generation_causal/main_files/build_step4_*.py
+vlms/qwen3_vl_generation_causal/main_files/run_step3_multilayer_patch.sh
+vlms/qwen3_vl_generation_causal/main_files/run_step4_discovery.sh
+vlms/qwen3_vl_generation_causal/main_files/run_step5*.sh
+vlms/qwen3_vl_generation_causal/main_files/validate_spatial_deepstack_hooks.py
 
 ## ignore data files in the filteration pipeline
 data_filteration/data/
@@ -9,7 +92,8 @@ data_filteration/filtered_results/
 data_filteration/filtered_results_seed_bench/
 data_filteration/seed_bench_filtered/
 data_filteration/copy_images_from_json.py
-
+data_filteration/automated_annotations/
+data_filteration/automated_annotations_script/
 
 ## files and folders to ignore in scenetap folder
 scenetap/data/
@@ -23,6 +107,12 @@ scenetap/som_images/
 scenetap/*.backup
 scenetap/*.out
 scenetap/*.zip
+scenetap/som_images_gqa/
+scenetap/batches_files/
+scenetap/batches_files_validation/
+scenetap/batches_outputs/
+scenetap/batches_outputs_validation/
+scenetap/batch_output.jsonl
 
 
 ## vlms folder 
@@ -34,3 +124,48 @@ vlms/fix_json_files.py
 vlms/infere.py
 vlms/*.json
 vlms/activations_analysis/
+vlms/activations/activations/
+vlms/activations/activations_output/
+vlms/activation_patching/*_outputs/
+vlms/activation_patching/clean_overlay_previews/
+vlms/activation_patching/hf_remote_validation_cache/
+vlms/attention_weights/*_attentions/
+vlms/attention_weights/heatmaps*/
+vlms/attention_weights/plots*/
+vlms/attention_weights/output*/
+vlms/attention_weights/*_plots/
+vlms/attention_weights/mapping_debug/
+vlms/integrated_gradients/*outputs*/
+vlms/integrated_gradients/one_question*/
+vlms/integrated_gradients/results_analysis/
+vlms/occlusion/*results*/
+vlms/occlusion/masked_images*/
+vlms/probing/*analysis*/
+vlms/probing/visualizations*/
+
+# Large, reproducible experiment records stay local. Aggregated CSV tables,
+# final figures, reports, and source code remain eligible for version control.
+vlms/open_ended_evaluation/outputs/full/
+vlms/open_ended_evaluation/outputs/smoke/
+vlms/open_ended_evaluation/outputs/deterministic_evaluation/
+vlms/open_ended_evaluation/outputs/final_classification_six_models/
+vlms/open_ended_evaluation/outputs/judge_batches*/
+
+vlms/qwen3_vl_generation_causal/outputs/step1_scoring_smoke/
+vlms/qwen3_vl_generation_causal/outputs/mapping_audit_positive_overlap.json
+vlms/qwen3_vl_generation_causal/outputs/step2_spatial_deepstack/
+vlms/qwen3_vl_generation_causal/outputs/step3_multilayer_patch/
+vlms/qwen3_vl_generation_causal/outputs/step4_discovery/
+vlms/qwen3_vl_generation_causal/outputs/step5_frozen_window/
+vlms/qwen3_vl_generation_causal/outputs/step5b_8b_discovery/
+vlms/qwen3_vl_generation_causal/outputs/step5b_8b_frozen_window/
+vlms/qwen3_vl_generation_causal/outputs/step6_8b_full_all_layers/
+vlms/qwen3_vl_generation_causal/attention_intervention/outputs/full/
+vlms/qwen3_vl_generation_causal/attention_intervention/outputs/smoke/
+vlms/qwen3_vl_generation_causal/attention_intervention/outputs/full_runner_gate/
+
+# Per-question analysis tables are reproducible from the retained raw local
+# results; compact aggregate tables used by the plotting scripts are tracked.
+vlms/open_ended_evaluation/outputs/statistics_six_models/transitions.csv
+vlms/qwen3_vl_generation_causal/outputs/**/question_level_*.csv
+vlms/qwen3_vl_generation_causal/attention_intervention/outputs/analysis/question_level_*.csv

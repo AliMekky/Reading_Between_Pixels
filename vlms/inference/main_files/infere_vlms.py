@@ -1,12 +1,15 @@
-"""
-VLM MCQ Evaluator - HF Dataset Version
-Evaluates all 4 image variants from Hugging Face dataset.
-"""
+"""MCQ and open-ended VLM evaluation on the Hugging Face GUIC dataset."""
+
+import os
+
+# VLM inference does not use TensorFlow. Disabling it also avoids importing an
+# incompatible system TensorFlow/protobuf installation on CPU login nodes.
+os.environ.setdefault("USE_TF", "0")
 
 import torch
-import os
 import json
 import argparse
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional
 from PIL import Image, ImageFile
@@ -30,6 +33,13 @@ try:
 except Exception:
     QWEN_AVAILABLE = False
     print("Warning: Qwen2VL not available.")
+
+try:
+    from transformers import Qwen3VLForConditionalGeneration
+    QWEN3_AVAILABLE = True
+except Exception:
+    QWEN3_AVAILABLE = False
+    print("Warning: Qwen3-VL not available.")
 
 try:
     from transformers import LlavaNextForConditionalGeneration, LlavaNextProcessor
@@ -108,6 +118,7 @@ def build_questions_from_hf_dataset(
     image_field: str = "image",
     shuffle_options: bool = True,
     seed: int = 0,
+    max_samples: Optional[int] = None,
 ) -> List[Dict]:
     """
     GUIC version with per-question randomized option order.
@@ -132,7 +143,8 @@ def build_questions_from_hf_dataset(
 
     labels = ["A", "B", "C", "D"]
 
-    for idx in tqdm(range(len(dataset)), desc=f"Loading {variant} variant"):
+    row_count = len(dataset) if max_samples is None else min(max_samples, len(dataset))
+    for idx in tqdm(range(row_count), desc=f"Loading {variant} variant"):
         try:
             sample = dataset[idx]
             qid = sample.get("question_id", f"unknown_{idx}")
@@ -179,11 +191,16 @@ def build_questions_from_hf_dataset(
 
             items.append({
                 "image_id": qid,
+                "question_id": qid,
+                "source_image_id": sample.get("image_id"),
                 "image_input": img_obj,
                 "question": question,
                 "options": options,
                 "answer": ans,                 # <-- correct letter after shuffling
                 "option_meta": option_meta,    # <-- save permutation/mapping
+                "reference_answers": {
+                    cand["key"]: cand["text"] for cand in candidates
+                },
                 "raw_sample": sample,
             })
 
@@ -229,8 +246,16 @@ def evaluate_from_questions_list(
         
         result = {
             "image_id": item["image_id"],
+            "question_id": item.get("question_id", item["image_id"]),
+            "source_image_id": item.get("source_image_id"),
             "question": item["question"],
             "options": item["options"],
+            "option_meta": item.get("option_meta"),
+            "reference_answers": item.get("reference_answers"),
+            "model_id": evaluator.model_id,
+            "model_revision": evaluator.model_revision,
+            "evaluation_format": "mcq",
+            "variant": variant,
             "correct_answer": item.get("answer"),
             "predicted_answer": predicted_answer,
             "full_response": response,
@@ -262,6 +287,90 @@ def evaluate_from_questions_list(
         with open(output_file, "w") as f:
             json.dump(json_safe_results, f, indent=2)
         print(f"Saved results to: {output_file}")
+
+    return results
+
+
+OPEN_ENDED_INSTRUCTION = (
+    "Answer the question using the image. "
+    "Give only the short answer without explanation."
+)
+
+
+def evaluate_open_ended(
+    evaluator,
+    questions_list: List[Dict],
+    output_file: str,
+    max_new_tokens: int,
+    variant: str,
+    max_retries: int = 3,
+) -> List[Dict]:
+    """Generate open-ended answers with append-safe JSONL checkpointing."""
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if output_path.exists():
+        with output_path.open() as handle:
+            existing = [json.loads(line) for line in handle if line.strip()]
+    completed = {
+        row["question_id"] for row in existing if row.get("status") == "ok"
+    }
+    results = list(existing)
+    print(
+        f"[RESUME] variant={variant} completed={len(completed)} "
+        f"remaining={len(questions_list) - len(completed)}"
+    )
+
+    with output_path.open("a") as handle:
+        for index, item in enumerate(questions_list, start=1):
+            qid = str(item["question_id"])
+            if qid in completed:
+                continue
+            prompt = evaluator.format_open_ended_prompt(item["question"])
+            if "Options:" in prompt or "A, B, C, or D" in prompt:
+                raise AssertionError(f"MCQ content leaked into open-ended prompt for {qid}")
+
+            error = None
+            generation = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    generation = evaluator.process_open_ended_single(
+                        item["image_input"], prompt, max_new_tokens=max_new_tokens
+                    )
+                    break
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    print(f"[RETRY] qid={qid} attempt={attempt}/{max_retries} error={error}")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
+            record = {
+                "record_id": f"{evaluator.model_id}|open_ended|{variant}|{qid}",
+                "question_id": qid,
+                "source_image_id": item.get("source_image_id"),
+                "model_id": evaluator.model_id,
+                "model_revision": evaluator.model_revision,
+                "evaluation_format": "open_ended",
+                "variant": variant,
+                "question": item["question"],
+                "prompt": prompt,
+                "reference_answers": item["reference_answers"],
+                "status": "ok" if generation is not None else "error",
+            }
+            if generation is not None:
+                record.update(generation)
+                print(
+                    f"[GENERATION] {index}/{len(questions_list)} qid={qid} "
+                    f"variant={variant} tokens={generation['output_token_count']} "
+                    f"stop={generation['termination_reason']} "
+                    f"response={generation['raw_response']!r}"
+                )
+            else:
+                record["error"] = error
+                print(f"[FAILED] qid={qid} variant={variant} error={error}")
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            handle.flush()
+            results.append(record)
 
     return results
 
@@ -335,7 +444,9 @@ class BaseVLMEvaluator(ABC):
         self.model = None
         self.processor = None
         self._load_model()
+        self.model_revision = getattr(getattr(self.model, "config", None), "_commit_hash", None)
         print(type(self.processor))
+        print(f"Resolved model revision: {self.model_revision or 'unavailable'}")
         print("Model loaded successfully!\n")
         
     
@@ -381,6 +492,46 @@ class BaseVLMEvaluator(ABC):
         prompt += "\nAnswer with only the letter (A, B, C, or D):"
         
         return prompt
+
+    def format_open_ended_prompt(self, question: str) -> str:
+        """Format a neutral prompt that never exposes answer candidates."""
+        return f"{OPEN_ENDED_INSTRUCTION}\n\nQuestion: {question}"
+
+    def process_open_ended_single(
+        self, image_input, prompt: str, max_new_tokens: int = 32
+    ) -> Dict:
+        """Return only newly generated text and auditable generation metadata."""
+        image = self.load_image(image_input)
+        inputs = self._prepare_inputs(image, prompt)
+        prompt_length = int(inputs["input_ids"].shape[1])
+        with torch.inference_mode():
+            generated = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                return_dict_in_generate=True,
+            )
+        output_ids = generated.sequences[0, prompt_length:]
+        token_ids = [int(token_id) for token_id in output_ids.tolist()]
+        response = self._decode_output(output_ids.unsqueeze(0)).strip()
+        eos = getattr(self.model.generation_config, "eos_token_id", None)
+        eos_ids = set(eos if isinstance(eos, list) else [eos])
+        termination = (
+            "eos" if token_ids and token_ids[-1] in eos_ids
+            else "max_tokens" if len(token_ids) >= max_new_tokens
+            else "model_stop"
+        )
+        image_hash = hashlib.sha256(
+            f"{image.mode}:{image.size}".encode() + image.tobytes()
+        ).hexdigest()
+        return {
+            "raw_response": response,
+            "output_token_ids": token_ids,
+            "output_token_count": len(token_ids),
+            "input_sequence_length": prompt_length,
+            "termination_reason": termination,
+            "image_sha256": image_hash,
+        }
     
     def process_single(self, image_input, prompt: str, 
                       max_new_tokens: int = 200, 
@@ -607,6 +758,24 @@ class QwenVLEvaluator(BaseVLMEvaluator):
         print(f"[Token Stats] seq_len={stats['sequence_length']} | image_tokens={stats['num_image_tokens']}")
 
 
+class Qwen3VLEvaluator(QwenVLEvaluator):
+    """Qwen3-VL dense Instruct evaluator."""
+
+    def __init__(self, model_id: str, device: str = None):
+        if not QWEN3_AVAILABLE or not QWEN_AVAILABLE:
+            raise ImportError("Qwen3-VL requires recent transformers and qwen-vl-utils")
+        BaseVLMEvaluator.__init__(self, model_id, device)
+
+    def _load_model(self):
+        self.model = Qwen3VLForConditionalGeneration.from_pretrained(
+            self.model_id,
+            dtype=torch.float16,
+            device_map="auto",
+        )
+        self.model.eval()
+        self.processor = AutoProcessor.from_pretrained(self.model_id)
+
+
 class LlavaNextEvaluator(BaseVLMEvaluator):
     """LLaVA-NeXT (v1.6) evaluator implementation."""
     
@@ -794,6 +963,32 @@ class InternVLEvaluator(BaseVLMEvaluator):
         full_response = f"User: {prompt}\nAssistant: {response}"
         return full_response
 
+    def process_open_ended_single(
+        self, image_input, prompt: str, max_new_tokens: int = 32
+    ) -> Dict:
+        image = self.load_image(image_input)
+        pixel_values = self.load_image_func(image, max_num=12).to(torch.bfloat16).to(self.device)
+        with torch.inference_mode():
+            response = self.model.chat(
+                self.tokenizer,
+                pixel_values,
+                prompt,
+                {"max_new_tokens": max_new_tokens, "do_sample": False},
+            )
+        response = response.strip()
+        token_ids = self.tokenizer.encode(response, add_special_tokens=False)
+        image_hash = hashlib.sha256(
+            f"{image.mode}:{image.size}".encode() + image.tobytes()
+        ).hexdigest()
+        return {
+            "raw_response": response,
+            "output_token_ids": [int(token_id) for token_id in token_ids],
+            "output_token_count": len(token_ids),
+            "input_sequence_length": None,
+            "termination_reason": "max_tokens" if len(token_ids) >= max_new_tokens else "model_stop",
+            "image_sha256": image_hash,
+        }
+
 # ==================== Model Registry ====================
 
 MODEL_REGISTRY = {
@@ -823,6 +1018,23 @@ else:
     MODEL_REGISTRY['qwen-vl'] = {
         'available': False,
         'error_message': 'Qwen-VL requires: pip install qwen-vl-utils torchvision'
+    }
+
+if QWEN3_AVAILABLE and QWEN_AVAILABLE:
+    MODEL_REGISTRY['qwen3-vl'] = {
+        'class': Qwen3VLEvaluator,
+        'default_model': 'Qwen/Qwen3-VL-8B-Instruct',
+        'available_models': [
+            'Qwen/Qwen3-VL-2B-Instruct',
+            'Qwen/Qwen3-VL-8B-Instruct',
+            'Qwen/Qwen3-VL-32B-Instruct',
+        ],
+        'available': True,
+    }
+else:
+    MODEL_REGISTRY['qwen3-vl'] = {
+        'available': False,
+        'error_message': 'Qwen3-VL requires recent transformers and qwen-vl-utils',
     }
 
 if LLAVA_NEXT_AVAILABLE:
@@ -881,7 +1093,7 @@ def get_evaluator(model_type: str, model_id: str = None, device: str = 'cuda') -
 # ==================== Main ====================
 
 def main():
-    parser = argparse.ArgumentParser(description="VLM MCQ Evaluator for HF datasets")
+    parser = argparse.ArgumentParser(description="VLM MCQ/open-ended evaluator for HF datasets")
     
     parser.add_argument('--model_type', type=str, default='llava')
     parser.add_argument('--model_id', type=str)
@@ -889,7 +1101,15 @@ def main():
     parser.add_argument('--hf_cache_dir', type=str, default='./hf_dataset_GUIC')
     parser.add_argument('--output', type=str, default='results.json')
     parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--max_tokens', type=int, default=50)
+    parser.add_argument('--max_tokens', type=int)
+    parser.add_argument(
+        '--evaluation_format',
+        choices=['mcq', 'open_ended'],
+        default='mcq',
+        help='Keep mcq as the backward-compatible default.',
+    )
+    parser.add_argument('--max_samples', type=int, help='Debug-only sample limit per condition.')
+    parser.add_argument('--max_retries', type=int, default=3)
     parser.add_argument('--device', type=str, choices=['cuda','cpu','auto'], default='cuda')
     parser.add_argument('--list_models', action='store_true')
     parser.add_argument(
@@ -933,17 +1153,16 @@ def main():
         "misleading_ungroundable",
         "irrelevant_word",
     ]
-    if args.image_field == 'cleaned_image' and 'notext' in variants:
-        raise ValueError(
-            "cleaned_image applies only to overlay variants; omit notext because it is unchanged"
-        )
+    max_tokens = args.max_tokens or (32 if args.evaluation_format == 'open_ended' else 50)
 
     print("[CONFIG] model_type={}".format(args.model_type))
     print("[CONFIG] model_id={}".format(args.model_id or MODEL_REGISTRY[args.model_type]['default_model']))
     print("[CONFIG] dataset={} rows={}".format(args.hf_dataset, len(ds)))
     print("[CONFIG] image_field={}".format(args.image_field))
     print("[CONFIG] variants={}".format(variants))
-    print("[CONFIG] seed={} max_tokens={} device={}".format(args.seed, args.max_tokens, args.device))
+    print("[CONFIG] evaluation_format={}".format(args.evaluation_format))
+    print("[CONFIG] seed={} max_tokens={} device={}".format(args.seed, max_tokens, args.device))
+    print("[CONFIG] open_ended_prompt={!r}".format(OPEN_ENDED_INSTRUCTION))
     for variant in variants:
         if variant != 'notext':
             if variant not in ds.features or args.image_field not in ds.features[variant]:
@@ -967,11 +1186,17 @@ def main():
             image_field=args.image_field,
             shuffle_options=True,
             seed=args.seed,
+            max_samples=args.max_samples,
         )
-        if len(questions_list) != len(ds):
+        expected_samples = len(ds)
+        if args.max_samples is not None:
+            if args.max_samples < 1:
+                raise ValueError("--max_samples must be positive")
+            expected_samples = min(args.max_samples, len(ds))
+        if len(questions_list) != expected_samples:
             raise RuntimeError(
                 "Loaded {}/{} samples for {}; refusing partial evaluation".format(
-                    len(questions_list), len(ds), variant
+                    len(questions_list), expected_samples, variant
                 )
             )
         print("[VALIDATION] variant={} loaded_samples={}/{}".format(
@@ -979,19 +1204,43 @@ def main():
         ))
         variant_output = safe_suffix(args.output, variant)
         
-        results = evaluate_from_questions_list(
-            evaluator,
-            questions_list,
-            output_file=variant_output,
-            batch_size=args.batch_size,
-            max_new_tokens=args.max_tokens,
-            variant = variant
-        )
+        if args.evaluation_format == 'open_ended':
+            results = evaluate_open_ended(
+                evaluator,
+                questions_list,
+                output_file=variant_output,
+                max_new_tokens=max_tokens,
+                variant=variant,
+                max_retries=args.max_retries,
+            )
+        else:
+            results = evaluate_from_questions_list(
+                evaluator,
+                questions_list,
+                output_file=variant_output,
+                batch_size=args.batch_size,
+                max_new_tokens=max_tokens,
+                variant=variant,
+            )
         
-        acc = compute_accuracy(results)
+        if args.evaluation_format == 'open_ended':
+            latest_by_question = {row["question_id"]: row for row in results}
+            result_count = len(latest_by_question)
+            success_count = sum(
+                row.get("status") == "ok" for row in latest_by_question.values()
+            )
+            error_count = result_count - success_count
+            acc = None
+        else:
+            result_count = len(results)
+            success_count = result_count
+            error_count = 0
+            acc = compute_accuracy(results)
         summary.append({
             "variant": variant,
-            "num_samples": len(results),
+            "num_samples": result_count,
+            "num_success": success_count,
+            "num_errors": error_count,
             "accuracy_percent": round(acc, 2) if acc is not None else None,
             "output_file": variant_output,
             "image_field": args.image_field,
@@ -999,7 +1248,8 @@ def main():
         })
 
     # Save summary
-    summary_path = safe_suffix(args.output, "summary")
+    output_path = Path(args.output)
+    summary_path = str(output_path.with_name(f"{output_path.stem}_summary.json"))
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 

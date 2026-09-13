@@ -40,6 +40,7 @@ from activation_patch_llava_next_debug import (
     image_size_to_num_views,
     log,
     maximum_absolute_difference,
+    overlap_fraction_of_token,
     parse_streams,
     prepare_inputs,
     region_token_indices,
@@ -281,6 +282,7 @@ def build_regions_full_coverage(
     min_overlap_fraction: float,
     image_hw: Tuple[int, int],
     seed: int,
+    allow_text_positive_overlap_fallback: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     """Build primary regions for all samples and optional object controls.
 
@@ -293,7 +295,22 @@ def build_regions_full_coverage(
     text_indices = region_token_indices(
         mapping_tokens, text_bbox, streams, min_overlap_fraction
     )
+    text_selection_method = "minimum_token_area_overlap"
+    if not text_indices and allow_text_positive_overlap_fallback:
+        allowed_kinds = {"base_patch" if stream == "base" else "mosaic_patch" for stream in streams}
+        text_indices = [
+            int(token["token_idx"])
+            for token in mapping_tokens
+            if token.get("kind") in allowed_kinds
+            and token.get("bbox") is not None
+            and overlap_fraction_of_token(tuple(token["bbox"]), text_bbox) > 0.0
+        ]
+        text_selection_method = "positive_overlap_fallback"
     require(text_indices, "text_region maps to zero visual patch tokens")
+    selected_overlaps = [
+        overlap_fraction_of_token(tuple(mapping_tokens[index]["bbox"]), text_bbox)
+        for index in text_indices
+    ]
     regions: Dict[str, Dict[str, Any]] = {
         "text_region": {
             "bbox_yxyx": list(text_bbox),
@@ -301,6 +318,10 @@ def build_regions_full_coverage(
             "token_count": len(text_indices),
             "stream_counts": stream_counts(text_indices, mapping_tokens),
             "available": True,
+            "selection_method": text_selection_method,
+            "requested_minimum_token_area_overlap": min_overlap_fraction,
+            "selected_token_overlap_fractions": selected_overlaps,
+            "maximum_token_area_overlap": max(selected_overlaps),
         }
     }
 
