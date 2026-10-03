@@ -15,7 +15,7 @@ mkdir -p jobs_logs
 source /apps/local/anaconda3/conda_init.sh
 conda activate text_in_image
 
-cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/inference
+cd /l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/inference
 
 MODELS=(
     "qwen-vl"

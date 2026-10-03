@@ -1,0 +1,18 @@
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrr}
+\toprule
+ & Grounded & Ungrounded \\
+Metric & fooled $-$ robust & fooled $-$ robust \\
+\midrule
+Early--middle restoration (L5--12) & 3.97 [1.36, 7.21] & 4.00 [2.19, 5.89] \\
+Middle T$\rightarrow$Q (L12--17) & 0.34 [$-$0.06, 0.84] & 0.51 [0.21, 0.88] \\
+Late T$\rightarrow$A (L30--35) & 0.75 [$-$0.60, 2.29] & $-$0.13 [$-$0.99, 0.86] \\
+Late Q$\rightarrow$A (L30--35) & $-$0.18 [$-$0.34, $-$0.03] & $-$0.18 [$-$0.29, $-$0.08] \\
+\bottomrule
+\end{tabular}
+\caption{Differences between fooled and robust questions in Qwen3-VL-8B (nats/token). Fooled: correct on the clean image and answers the displayed misleading word with the overlay; robust: correct on both (grounded: 23 fooled, 147 robust; ungrounded: 38 fooled, 134 robust). Restoration is the text-minus-random activation-patching effect averaged over layers 5--12; T$\rightarrow$Q and T$\rightarrow$A are text-minus-random attention-blocking effects and Q$\rightarrow$A is the raw blocking effect, all overlay-specific (overlay minus paired no-text image) in the stated windows; layer windows were fixed before the comparison. Brackets: bootstrap 95\% CI of the group difference.}
+\label{tab:fooled-robust}
+\end{table}

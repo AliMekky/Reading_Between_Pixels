@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run generation-specific Qwen3-VL-8B attention intervention on one shard."""
+"""Run generation-specific Qwen3-VL attention intervention on one shard."""
 
 import argparse
 import json
@@ -186,7 +186,9 @@ def run_sample(model, processor, layers, sample, entry, variant, seed):
 
 
 def main():
+    global MODEL_ID, WINDOWS
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model_id", default=MODEL_ID, choices=tuple(REVISIONS))
     parser.add_argument("--variant", required=True, choices=VARIANTS)
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--output_dir", type=Path, required=True)
@@ -195,6 +197,13 @@ def main():
     parser.add_argument("--max_samples", type=int, default=0)
     parser.add_argument("--seed", type=int, default=271828)
     args = parser.parse_args()
+    MODEL_ID = args.model_id
+    expected_layers = {"Qwen/Qwen3-VL-2B-Instruct": 28, "Qwen/Qwen3-VL-8B-Instruct": 36}[MODEL_ID]
+    # Six relative-depth bins: nearest integer boundaries, covering every layer.
+    boundaries = [round(i * expected_layers / 6) for i in range(7)]
+    WINDOWS = {f"layers_{a:02d}_{b-1:02d}": list(range(a, b))
+               for a, b in zip(boundaries, boundaries[1:])}
+    assert [i for ids in WINDOWS.values() for i in ids] == list(range(expected_layers))
     manifest = json.loads(args.selection.read_text()); entries = manifest["selected_samples"]
     qids = [str(x["question_id"]) for x in entries]
     if len(qids) != 305 or len(set(qids)) != 305 or not 0 <= args.shard_id < args.num_shards:
@@ -217,7 +226,7 @@ def main():
     ).to("cuda").eval()
     processor = AutoProcessor.from_pretrained(MODEL_ID, revision=REVISIONS[MODEL_ID])
     layers = model.model.language_model.layers
-    if len(layers) != 36 or model.config.text_config._attn_implementation != "eager":
+    if len(layers) != expected_layers or model.config.text_config._attn_implementation != "eager":
         raise AssertionError("architecture/backend mismatch")
     dataset = load_from_disk(str(CACHE)); samples_dir = args.output_dir / "samples"; samples_dir.mkdir(exist_ok=True)
     completed = resumed = records = unavailable = 0; maxima = {"cache": 0., "noop": 0., "blocked": 0., "row": 0.}
@@ -225,7 +234,11 @@ def main():
         qid = str(entry["question_id"]); path = samples_dir / f"{qid}.json"
         if path.exists():
             report = json.loads(path.read_text())
-            if report.get("status") != "complete": raise AssertionError(f"invalid checkpoint {path}")
+            if (report.get("status") != "complete" or report.get("model_id") != MODEL_ID
+                    or report.get("model_revision") != REVISIONS[MODEL_ID]
+                    or report.get("windows") != WINDOWS or report.get("variant") != args.variant
+                    or report.get("question_id") != qid):
+                raise AssertionError(f"incompatible checkpoint {path}")
             resumed += 1
         else:
             started = time.perf_counter(); sample = dataset[int(entry["dataset_index"])]

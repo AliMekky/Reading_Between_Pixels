@@ -27,9 +27,9 @@ def main():
     lookup = {(r["variant"], r["direction"], int(r["layer"]), r["region"]): r for r in rows}
     variants = list(VARIANTS.items())[:2] if args.exclude_irrelevant else list(VARIANTS.items())
 
-    figure, axes = plt.subplots(2, len(variants), figsize=(ACL_TWO_COL, 4.6), sharex=True, sharey=True)
+    figure, axes = plt.subplots(2, len(variants), figsize=(max(ACL_TWO_COL, 2.35 * len(variants)), 4.6), sharex=True, sharey=True)
     interpretations = []
-    letters = iter("abcdef")
+    letters = iter("abcdefgh")
     for row_index, direction in enumerate(DIRECTIONS):
         for column_index, (variant, title) in enumerate(variants):
             axis = axes[row_index, column_index]
@@ -55,6 +55,7 @@ def main():
                 "misleading_groundable": "grounded_text_minus_random",
                 "misleading_ungroundable": "ungrounded_text_minus_random",
                 "irrelevant_word": "irrelevant_text_minus_random",
+                "correct_answer": "correct_text_minus_random",
             }[variant]
             tested = [r for r in comparisons if r["direction"] == direction]
             significant = sum(float(r[comparison_name + "_fdr_q_value"]) < .05 and
@@ -74,7 +75,7 @@ def main():
     save_figure(figure, args.output)
     plt.close(figure)
     write_interpretation(args.output, "Figure 1: Layer-wise causal effects", [
-        "Positive values indicate movement in the intended direction: toward the correct answer for restoration and toward the overlaid option for insertion.",
+        "Positive values indicate the intended intervention direction. For misleading and irrelevant overlays, restoration moves toward correct and insertion toward displayed. For the correct overlay, restoration measures loss of correct support when its representation is removed, while insertion measures gain of correct support.",
         *interpretations,
         "Peak layers are descriptive because they were selected from this sweep; the paired-comparison table provides the inferential tests.",
     ])

@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-EXPERIMENT_DIR=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/open_ended_evaluation
-SECRETS=/nfs-stor/ali.mekky/.secrets/open_ended_eval.env
+EXPERIMENT_DIR=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/open_ended_evaluation
+SECRETS=/l/users/ali.mekky/.secrets/open_ended_eval.env
 cd "$EXPERIMENT_DIR"
 
 source /apps/local/anaconda3/conda_init.sh

@@ -47,6 +47,10 @@ def main():
         if not args.exclude_irrelevant:
             tests += [("grounded_minus_irrelevant", "Grounded − irrelevant"),
                       ("ungrounded_minus_irrelevant", "Ungrounded − irrelevant")]
+            if "correct_answer" in dict(variants):
+                tests += [("correct_minus_grounded", "Correct − grounded"),
+                          ("correct_minus_ungrounded", "Correct − ungrounded"),
+                          ("correct_minus_irrelevant", "Correct − irrelevant")]
         for name, label in tests:
             layer, mean, low, high, q = strongest(direction_rows, name)
             relation = "larger" if mean > 0 else "smaller"
@@ -73,9 +77,10 @@ def main():
             early["restoration"]["misleading_ungroundable"], early["restoration"]["misleading_groundable"],
             early["insertion"]["misleading_ungroundable"], early["insertion"]["misleading_groundable"])
     else:
-        overview = "Across layers 0–6, the observed ordering is ungrounded > irrelevant > grounded: restoration means are {:.3f}, {:.3f}, and {:.3f}; insertion means are {:.3f}, {:.3f}, and {:.3f}. This does not support a simple claim that only semantically misleading text is causally used; visible option text has a strong effect even in the irrelevant condition.".format(
+        overview = "Across layers 0–6, ungrounded, irrelevant, and grounded text have mean restoration effects {:.3f}, {:.3f}, and {:.3f}, and insertion effects {:.3f}, {:.3f}, and {:.3f}. The correct-overlay values are {:.3f} and {:.3f}; these have a different intended orientation, measuring loss under removal and gain under insertion of correct-answer information.".format(
             early["restoration"]["misleading_ungroundable"], early["restoration"]["irrelevant_word"], early["restoration"]["misleading_groundable"],
-            early["insertion"]["misleading_ungroundable"], early["insertion"]["irrelevant_word"], early["insertion"]["misleading_groundable"])
+            early["insertion"]["misleading_ungroundable"], early["insertion"]["irrelevant_word"], early["insertion"]["misleading_groundable"],
+            early["restoration"]["correct_answer"], early["insertion"]["correct_answer"])
     write_interpretation(args.output, "Figure 2: Comparison across text conditions", [
         "This figure compares the causal influence of the displayed text across the included conditions.",
         overview,

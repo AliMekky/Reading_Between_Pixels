@@ -7,15 +7,15 @@
 #SBATCH --cpus-per-task=16
 #SBATCH -t 08:00:00
 #SBATCH --job-name=activation_patch_sweep
-#SBATCH --output=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/activation_patching/logs/%x_%j.out
-#SBATCH --error=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/activation_patching/logs/%x_%j.err
+#SBATCH --output=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/activation_patching/logs/%x_%j.out
+#SBATCH --error=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/activation_patching/logs/%x_%j.err
 
 set -euo pipefail
 
 source /apps/local/anaconda3/conda_init.sh
 conda activate text_in_image
 
-ROOT=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/activation_patching
+ROOT=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/activation_patching
 MAIN_DIR="$ROOT/main_files"
 OUTPUT_DIR="$ROOT/layer_sweep_outputs"
 QUESTION_ID="${QUESTION_ID:-14412508}"

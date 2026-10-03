@@ -498,7 +498,7 @@ def plot_notext_only_with_ci(
 # -------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--npz_root", type=str, default="/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/llava-next_attentions")
+    parser.add_argument("--npz_root", type=str, default="/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/llava-next_attentions")
     parser.add_argument("--hf_dataset", type=str, default="AHAAM/GUIC")
     parser.add_argument("--hf_cache_dir", type=str, default="../integrated_gradients/hf_dataset_GUIC")
     parser.add_argument("--split", type=str, default="test")

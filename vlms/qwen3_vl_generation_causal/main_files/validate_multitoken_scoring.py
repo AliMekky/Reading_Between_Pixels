@@ -16,7 +16,7 @@ from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 from sequence_scoring import answer_margin, scored_token_logprobs, strongest_incorrect, summarize_answer_score
 
 
-ROOT = Path("/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels")
+ROOT = Path("/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels")
 CACHE = ROOT / "vlms/activation_patching/hf_dataset_GUIC_cleaned/AHAAM__GUIC"
 SELECTION = ROOT / "vlms/activation_patching/main_files/activation_patch_confirmation_selection_shared_305.json"
 PREVIOUS = ROOT / "vlms/open_ended_evaluation/outputs/full"

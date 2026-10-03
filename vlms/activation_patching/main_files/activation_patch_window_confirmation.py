@@ -80,6 +80,7 @@ def forward_and_capture_many_resid_pre(
     layers: Sequence[torch.nn.Module],
     layer_indices: Sequence[int],
     inputs: Dict[str, torch.Tensor],
+    forward_fn=forward_next_token_logits,
 ) -> Tuple[torch.Tensor, Dict[int, torch.Tensor]]:
     captured: Dict[int, torch.Tensor] = {}
     handles = []
@@ -93,7 +94,7 @@ def forward_and_capture_many_resid_pre(
 
         handles.append(layers[layer_index].register_forward_pre_hook(capture_hook))
     try:
-        logits = forward_next_token_logits(model, inputs)
+        logits = forward_fn(model, inputs)
     finally:
         for handle in handles:
             handle.remove()
@@ -110,6 +111,7 @@ def forward_with_window_patch(
     donor_hidden: Dict[int, torch.Tensor],
     sequence_positions: Sequence[int],
     require_nonzero_difference: bool = True,
+    forward_fn=forward_next_token_logits,
 ) -> Tuple[torch.Tensor, Dict[str, Any]]:
     integrity_by_layer: Dict[int, Dict[str, float]] = {}
     handles = []
@@ -145,7 +147,7 @@ def forward_with_window_patch(
 
         handles.append(layers[layer_index].register_forward_pre_hook(patch_hook))
     try:
-        logits = forward_next_token_logits(model, recipient_inputs)
+        logits = forward_fn(model, recipient_inputs)
     finally:
         for handle in handles:
             handle.remove()

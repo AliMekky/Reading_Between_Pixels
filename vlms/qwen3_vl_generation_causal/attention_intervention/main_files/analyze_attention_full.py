@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Audit and aggregate the full Qwen3-VL-8B generation attention experiment."""
+"""Audit and aggregate the full Qwen3-VL generation attention experiment (--model 8b, the default, or 2b)."""
 
+import argparse
 import csv
 import json
 from pathlib import Path
@@ -16,6 +17,11 @@ OUTPUT = HERE.parent / "outputs/analysis"
 SELECTION = ROOT / "vlms/activation_patching/main_files/activation_patch_confirmation_selection_shared_305.json"
 VARIANTS = ("correct_answer", "misleading_groundable", "misleading_ungroundable", "irrelevant_word")
 WINDOWS = tuple(f"layers_{start:02d}_{start + 5:02d}" for start in range(0, 36, 6))
+MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
+# 2B uses six relative-depth bins over its 28 layers (see main_files/run_2b_replication.sh).
+MODELS = {"8b": dict(model_id="Qwen/Qwen3-VL-8B-Instruct", input="outputs/full", output="outputs/analysis", windows=WINDOWS),
+          "2b": dict(model_id="Qwen/Qwen3-VL-2B-Instruct", input="outputs/full_2b", output="outputs/analysis_2b",
+                     windows=("layers_00_04", "layers_05_08", "layers_09_13", "layers_14_18", "layers_19_22", "layers_23_27"))}
 BOOTSTRAPS = 10_000
 
 
@@ -47,7 +53,17 @@ def holm(values):
     return result
 
 
+def configure(model):
+    global MODEL_ID, INPUT, OUTPUT, WINDOWS
+    cfg = MODELS[model]
+    MODEL_ID, WINDOWS = cfg["model_id"], cfg["windows"]
+    INPUT, OUTPUT = HERE.parent / cfg["input"], HERE.parent / cfg["output"]
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", choices=sorted(MODELS), default="8b")
+    configure(parser.parse_args().model)
     manifest = json.loads(SELECTION.read_text())
     qids = [str(x["question_id"]) for x in manifest["selected_samples"]]
     if len(qids) != 305 or len(set(qids)) != 305: raise AssertionError("invalid shared manifest")
@@ -62,7 +78,7 @@ def main():
             sample = json.loads(path.read_text()); qid = str(sample["question_id"])
             if sample.get("status") != "complete" or qid in observed or qid not in expected_ids:
                 raise AssertionError(f"invalid sample {path}")
-            if sample.get("model_id") != "Qwen/Qwen3-VL-8B-Instruct" or tuple(sample["windows"]) != WINDOWS:
+            if sample.get("model_id") != MODEL_ID or tuple(sample["windows"]) != WINDOWS:
                 raise AssertionError(f"wrong configuration {path}")
             validation = sample["validation"]
             if validation["saved_records"] != validation["expected_records"] or len(sample["records"]) != validation["saved_records"]:
@@ -144,7 +160,7 @@ def main():
     adjusted = holm([x["p_raw"] for x in groundedness])
     for row, value in zip(groundedness, adjusted): row["p_holm_across_12_tests"] = float(value)
 
-    audit = {"status": "pass", "model_id": "Qwen/Qwen3-VL-8B-Instruct", "question_condition_files": files,
+    audit = {"status": "pass", "model_id": MODEL_ID, "question_condition_files": files,
              "questions_per_condition": 305, "saved_records": records,
              "structurally_unavailable_records": unavailable, "validation_failures": 0,
              "maximum_validation_values": maxima, "bootstrap_draws": BOOTSTRAPS,

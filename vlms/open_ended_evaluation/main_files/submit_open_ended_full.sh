@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-EXPERIMENT_DIR=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/open_ended_evaluation
+EXPERIMENT_DIR=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/open_ended_evaluation
 cd "$EXPERIMENT_DIR"
 mkdir -p logs outputs/full
 

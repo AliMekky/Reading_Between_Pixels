@@ -16,7 +16,7 @@ mkdir -p jobs_logs
 source /apps/local/anaconda3/conda_init.sh
 conda activate text_in_image
 
-cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/occlusion/
+cd /l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/occlusion/
 
 
 model="llava-next"

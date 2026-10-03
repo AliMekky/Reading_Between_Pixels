@@ -169,3 +169,9 @@ vlms/qwen3_vl_generation_causal/attention_intervention/outputs/full_runner_gate/
 vlms/open_ended_evaluation/outputs/statistics_six_models/transitions.csv
 vlms/qwen3_vl_generation_causal/outputs/**/question_level_*.csv
 vlms/qwen3_vl_generation_causal/attention_intervention/outputs/analysis/question_level_*.csv
+
+# Generated figures (rebuild with paper_plots/make_all.sh) and large self-contained galleries
+**/*.svg
+vlms/object_addition_pilot/gallery*.html
+**/*.log
+**/*.lock

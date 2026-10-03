@@ -14,7 +14,7 @@ mkdir -p jobs_logs
 source /apps/local/anaconda3/conda_init.sh
 conda activate text_in_image
 
-cd /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/
+cd /l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/
 
 nvidia-smi
 
@@ -35,7 +35,7 @@ START_TIME=$(date +%s)
 
 python -u run_ig_for_all.py \
   --region_script ./ig_regions.py \
-  --ig_root /nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/llava-next_ig_token_outputs\
+  --ig_root /l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/llava-next_ig_token_outputs\
   --out_dir ./one_question_three_regions_mask_based_strict_sign \
   --ids_file ../inference/no_overlap_question_ids.txt \
   --skip_existing

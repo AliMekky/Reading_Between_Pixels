@@ -105,7 +105,7 @@ class TextDiffuser(object):
 
         self.vae = AutoencoderKL.from_pretrained('runwayml/stable-diffusion-v1-5', subfolder="vae").half().cuda()
         self.unet = UNet2DConditionModel.from_pretrained(
-            '/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/unilm/textdiffuser2-full-ft-inpainting', subfolder="unet"
+            '/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/unilm/textdiffuser2-full-ft-inpainting', subfolder="unet"
         ).half().cuda()
         self.text_encoder.resize_token_embeddings(len(self.tokenizer))
 

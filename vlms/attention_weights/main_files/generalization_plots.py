@@ -36,8 +36,8 @@ from datasets import load_dataset, load_from_disk, Dataset, DatasetDict
 # =============================================================================
 # FILE PATHS — update these
 # =============================================================================
-LLAVA_NPZ_ROOT = "/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/llava-next_attentions"
-QWEN_NPZ_ROOT  = "/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/qwen-vl_attentions"
+LLAVA_NPZ_ROOT = "/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/llava-next_attentions"
+QWEN_NPZ_ROOT  = "/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/attention_weights/qwen-vl_attentions"
 HF_DATASET     = "AHAAM/GUIC"
 HF_CACHE_DIR   = "../integrated_gradients/hf_dataset_GUIC"
 QID_FILE       = "../inference/no_overlap_question_ids.txt"

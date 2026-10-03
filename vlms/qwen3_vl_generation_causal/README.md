@@ -1,5 +1,44 @@
 # Qwen3-VL Generation Causal Experiment
 
+## Full 2B replication (submitted 2026-09-17)
+
+Update 2026-09-19: both original tasks reached the 24-hour limit. Activation
+patching completed all 353,800 records. Attention completed all 305 questions
+for correct, grounded, and ungrounded overlays, plus 78/305 irrelevant cases.
+The remaining 119/108 cases are resumed by array job `263330` using
+`sbatch main_files/run_2b_attention_remaining.sh`. All 78 existing checkpoints
+passed model/revision/window/seed-configuration and record-count checks before
+submission. Task `263330_1` failed during CUDA initialization on gpu-54
+(`No CUDA GPUs are available`) and was replaced by `263332_1`, excluding that
+node. Task `263330_0` remains running. The resume tasks have an eight-hour limit
+and use the same output directories; completion is still pending.
+
+```bash
+sbatch main_files/run_2b_replication.sh
+```
+
+Array job `250095` has two GPU tasks, splitting the same 305 questions into
+153 and 152. Each task first validates attention blocking on one question for
+each of the four overlays, then runs the full activation-patching shard followed
+by the full attention-intervention shard. Any failed gate stops that task.
+
+- Activation patching: all 28 layers, both directions, text, three random
+  controls, all image tokens, and the DeepStack source bundle. Expected total:
+  353,800 records under `outputs/step6_2b_full_all_layers/`.
+- Attention: identical path definitions, paired no-text controls, and scoring
+  as 8B, with six exhaustive relative-depth windows: 0–4, 5–8, 9–13, 14–18,
+  19–22, 23–27 (zero-based). Rounded sixth-depth boundaries create widths of
+  four or five layers; these are coverage bins, not inferred causal windows.
+  Outputs: `attention_intervention/outputs/full_2b/`; gates: `outputs/gate_2b/`
+  inside `attention_intervention/`.
+- Expected validation: no-op/cache errors at most 1e-3, zero blocked attention
+  probability, attention-row error at most 2e-3, exact patch integrity, and
+  saved/expected record agreement. Every condition ends with `[PASS]`.
+- Both stages checkpoint individual questions and can resume with the same
+  command after a time limit. Logs: `logs/qwen3_2b_replication_250095_<0|1>.*`.
+- Free-generation blocking is pending the 2B pathway results and an explicit
+  layer selection; no causal window is assumed to transfer from 8B.
+
 This folder implements
 [`qwen3_vl_generation_causal_experiment_profile.md`](../../qwen3_vl_generation_causal_experiment_profile.md).
 It is independent of the earlier MCQ causal experiments but reuses their

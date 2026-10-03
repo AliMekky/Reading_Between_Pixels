@@ -5,7 +5,7 @@ import sys
 import random
 from pathlib import Path
 
-ROOT = Path("/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels")
+ROOT = Path("/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels")
 sys.path.insert(0, str(ROOT / "vlms/inference/main_files"))
 
 from infere_vlms import (  # noqa: E402

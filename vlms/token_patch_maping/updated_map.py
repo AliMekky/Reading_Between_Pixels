@@ -303,7 +303,7 @@ def main():
     processor = LlavaNextProcessor.from_pretrained(model_name)
 
     # --- Load an image (change path) ---
-    image_path = "/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/scenetap/data/images/128.jpg"
+    image_path = "/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/scenetap/data/images/128.jpg"
     img = Image.open(image_path).convert("RGB")
 
     # --- Build prompt (must contain exactly N <image> tokens equal to packed image tokens, or processor/model will error) ---

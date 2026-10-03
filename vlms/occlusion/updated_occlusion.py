@@ -30,7 +30,7 @@ from scipy.ndimage import zoom
 from datasets import load_dataset, load_from_disk, DatasetDict
 
 import sys
-sys.path.append('/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels')
+sys.path.append('/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels')
 from Reading_Between_Pixels.vlms.inference.main_files.infere_vlms import get_evaluator
 
 

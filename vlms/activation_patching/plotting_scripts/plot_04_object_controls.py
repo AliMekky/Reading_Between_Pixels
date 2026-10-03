@@ -24,9 +24,9 @@ def main():
     lookup = {(r["variant"], r["direction"], int(r["layer"]), r["region"]): r for r in rows}
     variants = list(VARIANTS.items())[:2] if args.exclude_irrelevant else list(VARIANTS.items())
 
-    figure, axes = plt.subplots(2, len(variants), figsize=(ACL_TWO_COL, 4.6), sharex=True, sharey=True)
+    figure, axes = plt.subplots(2, len(variants), figsize=(max(ACL_TWO_COL, 2.35 * len(variants)), 4.6), sharex=True, sharey=True)
     notes = []
-    letters = iter("abcdef")
+    letters = iter("abcdefgh")
     for row_index, direction in enumerate(("restoration", "insertion")):
         for column_index, (variant, title) in enumerate(variants):
             axis = axes[row_index, column_index]

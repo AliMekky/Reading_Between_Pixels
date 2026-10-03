@@ -1,4 +1,8 @@
+import os
 from openai import OpenAI
+# from dotenv import load_dotenv
+# load_dotenv()
+
 
 
 class Message:
@@ -142,6 +146,10 @@ class CompletionRequest:
         - top_p: Nucleus sampling parameter (default: 0.5).
         - response_format: Expected response format (default: "Plan").
         """
+        # OpenAI_API_KEY = os.getenv("OPENAI_API_KEY")
+        # if OpenAI_API_KEY is None:
+        #     raise ValueError("OPENAI_API_KEY environment variable not set.")
+        
         self.client = OpenAI()
 
         self.model = model

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Audit and aggregate the full-305 Qwen3-VL-8B all-layer experiment."""
+"""Audit and aggregate the full-305 Qwen3-VL all-layer experiment (--model 8b, the default, or 2b)."""
 
+import argparse
 import csv
 import json
 import math
@@ -11,6 +12,9 @@ from scipy.stats import wilcoxon
 
 
 HERE = Path(__file__).resolve().parent
+MODELS = {"8b": dict(model_id="Qwen/Qwen3-VL-8B-Instruct", n_layers=36),
+          "2b": dict(model_id="Qwen/Qwen3-VL-2B-Instruct", n_layers=28)}
+MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
 INPUT = HERE.parent / "outputs/step6_8b_full_all_layers"
 OUTPUT = HERE.parent / "outputs/step6_8b_analysis"
 FULL_SELECTION = HERE.parents[1] / "activation_patching/main_files/activation_patch_confirmation_selection_shared_305.json"
@@ -69,7 +73,20 @@ def holm(p_values):
     return adjusted
 
 
+def configure(model):
+    """Set the model-specific globals; records per sample = layers x regions x directions + source bundle."""
+    global MODEL_ID, INPUT, OUTPUT, LAYERS, RECORDS_PER_SAMPLE
+    MODEL_ID, n_layers = MODELS[model]["model_id"], MODELS[model]["n_layers"]
+    INPUT = HERE.parent / f"outputs/step6_{model}_full_all_layers"
+    OUTPUT = HERE.parent / f"outputs/step6_{model}_analysis"
+    LAYERS = tuple(range(n_layers))
+    RECORDS_PER_SAMPLE = len(LAYERS) * len(REGIONS) * len(DIRECTIONS) + len(REGIONS) * len(DIRECTIONS)
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", choices=sorted(MODELS), default="8b")
+    configure(parser.parse_args().model)
     full = json.loads(FULL_SELECTION.read_text())
     qids = [str(row["question_id"]) for row in full["selected_samples"]]
     discovery = {str(row["question_id"]) for row in json.loads(DISCOVERY_SELECTION.read_text())["selected_samples"]}
@@ -101,9 +118,9 @@ def main():
             qid = str(sample["question_id"])
             if qid in observed or qid not in qid_index or sample.get("status") != "complete":
                 raise AssertionError(f"invalid or duplicate sample: {path}")
-            if sample.get("model_id") != "Qwen/Qwen3-VL-8B-Instruct" or sample.get("layers") != list(LAYERS):
+            if sample.get("model_id") != MODEL_ID or sample.get("layers") != list(LAYERS):
                 raise AssertionError(f"wrong model/layers: {path}")
-            if len(sample.get("records", [])) != 370 or sample.get("expected_records") != 370:
+            if len(sample.get("records", [])) != RECORDS_PER_SAMPLE or sample.get("expected_records") != RECORDS_PER_SAMPLE:
                 raise AssertionError(f"wrong record count: {path}")
             text_count = len(sample["regions"]["text_region"]["token_indices"])
             if any(len(sample["regions"][region]["token_indices"]) != text_count for region in REGIONS[1:4]):
@@ -206,10 +223,10 @@ def main():
                                                              "text_minus_random_ci95_low", "text_minus_random_ci95_high",
                                                              "all_image_effect_mean", "text_minus_random_p_holm_all305")})
 
-    audit = {"status": "pass", "model_id": "Qwen/Qwen3-VL-8B-Instruct",
+    audit = {"status": "pass", "model_id": MODEL_ID,
              "question_condition_files": sample_count, "questions_per_condition": 305,
              "discovery_questions": 40, "heldout_questions": int(heldout_mask.sum()),
-             "records": record_count, "expected_records": 451_400,
+             "records": record_count, "expected_records": len(VARIANTS) * 305 * RECORDS_PER_SAMPLE,
              "maximum_noop_logit_difference": noop_max,
              "maximum_patch_to_donor_difference": patch_error,
              "maximum_direct_unpatched_change": unpatched_change,

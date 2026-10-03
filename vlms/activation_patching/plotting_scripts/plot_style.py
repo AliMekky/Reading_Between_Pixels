@@ -34,11 +34,13 @@ VARIANTS = {
     "misleading_groundable": "Grounded misleading",
     "misleading_ungroundable": "Ungrounded misleading",
     "irrelevant_word": "Irrelevant option text",
+    "correct_answer": "Correct-answer overlay",
 }
 CONDITION_COLORS = {
     "misleading_groundable": "#D55E00",
     "misleading_ungroundable": "#0072B2",
     "irrelevant_word": "#009E73",
+    "correct_answer": "#CC79A7",
 }
 REGION_LABELS = {
     "text_region": "Text region",

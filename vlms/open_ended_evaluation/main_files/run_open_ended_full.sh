@@ -27,7 +27,7 @@ MODEL_IDS=(
   Qwen/Qwen3-VL-32B-Instruct
 )
 
-ROOT=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels
+ROOT=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels
 EXPERIMENT_DIR="$ROOT/vlms/open_ended_evaluation"
 INDEX=${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}
 MODEL_TYPE=${MODEL_TYPES[$INDEX]}

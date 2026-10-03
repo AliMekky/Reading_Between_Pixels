@@ -5,6 +5,7 @@ import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 from matplotlib.ticker import PercentFormatter
 
 from plot_style import (ACL_TWO_COL, CI_ALPHA, CONDITION_COLORS, LINE_WIDTH,
@@ -23,7 +24,7 @@ def main():
 
     figure, axes = plt.subplots(1, 2, figsize=(ACL_TWO_COL, 2.55), sharex=True, sharey=True)
     interpretations = []
-    titles = {"restoration": "Recovery: target → correct", "insertion": "Transfer: correct → target"}
+    titles = {"restoration": "Restoration transition", "insertion": "Insertion transition"}
     for axis, direction, letter in zip(axes, ("restoration", "insertion"), "ab"):
         for variant, label in variants:
             series = [lookup[(variant, direction, layer)] for layer in range(32)]
@@ -43,7 +44,9 @@ def main():
         axis.set_xticks(range(0, 32, 5))
         axis.yaxis.set_major_formatter(PercentFormatter(1))
     axes[0].set_ylabel("Conditional transition rate")
-    handles, labels = axes[0].get_legend_handles_labels()
+    handles = [Line2D([0], [0], color=CONDITION_COLORS[variant], lw=LINE_WIDTH)
+               for variant, _ in variants]
+    labels = [label for _, label in variants]
     figure.legend(handles, labels, loc="lower center", ncol=len(variants), frameon=True,
                   framealpha=.95, edgecolor="#CCCCCC", bbox_to_anchor=(.5, -.08))
     figure.supxlabel("Decoder layer (resid_pre)", y=.14)
@@ -51,7 +54,7 @@ def main():
     save_figure(figure, args.output)
     plt.close(figure)
     write_interpretation(args.output, "Figure 3: Prediction transitions", [
-        "Restoration asks whether removing an overlay representation recovers an initially target-misled answer. Insertion asks whether adding it transfers an initially correct answer to the overlay option.",
+        "For misleading and irrelevant overlays, restoration measures displayed-option→correct recovery and insertion measures correct→displayed-option transfer. For the correct overlay, restoration measures correct→noncorrect loss and insertion measures noncorrect→correct gain.",
         *interpretations,
         "These peak rates are descriptive. Logit-margin effects remain the primary outcome because many causal shifts do not cross the discrete prediction boundary.",
     ])

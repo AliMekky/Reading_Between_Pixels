@@ -11,8 +11,10 @@ same 305 questions as the attention and integrated-gradients analyses.
 - Model: `llava-hf/llava-v1.6-mistral-7b-hf`
 - Model revision: `2424fdd47412fccc66d91719126b420e9fbd7065`
 - Dataset revision: `27b45899d1154ef1f08ce5c40d45d2468e4ea3e2`
-- Conditions: grounded misleading, ungrounded misleading, and irrelevant text
-- Primary metric: correct-minus-condition-specific misleading logit margin
+- Conditions: grounded misleading, ungrounded misleading, irrelevant option,
+  and correct-answer text
+- Primary metric: correct-minus-condition-specific option margin; the correct
+  overlay uses the strongest incorrect no-text option as its fixed comparator
 - Primary controls: three random regions matched to the text region in token
   count and base/mosaic composition
 
@@ -23,10 +25,12 @@ same 305 questions as the attention and integrated-gradients analyses.
 | `activation_patch_window_confirmation.py` | Main inference engine for single-layer and simultaneous layer-window patching. It also performs runtime validation and checkpointing. |
 | `activation_patch_final_selection_shared_305_three_conditions.json` | Frozen 305-question manifest for the three overlay conditions. |
 | `run_activation_patch_shared_layer_sweep.sh` | Main SLURM array launcher: three conditions × 32 layers. |
+| `run_activation_patch_correct_overlay.sh` | Main 32-layer launcher for the correct-answer positive control. |
 | `activation_patch_confirmation_selection_shared_305.json` | Frozen manifest for the layer-window analysis. |
 | `run_activation_patch_window_confirmation.sh` | Confirmatory early/middle/late layer-window launcher. |
-| `../plotting_scripts/prepare_plot_data.py` | Creates compact statistics tables from the three raw reports. |
+| `../plotting_scripts/prepare_plot_data.py` | Creates compact statistics and validation tables from the four raw reports. |
 | `../plotting_scripts/run_all_plots.sh` | Generates all aggregate paper plots and interpretation files. |
+| `../plotting_scripts/run_full_analysis_all_conditions.sh` | Validates all four raw reports and generates the final four-condition tables and plots. |
 | `../plotting_scripts/run_behavior_breakdown.sh` | Generates the secondary Fooled-versus-Robust analysis. |
 
 ### Run the main 32-layer experiment
@@ -35,11 +39,12 @@ From `vlms/activation_patching/main_files`:
 
 ```bash
 sbatch run_activation_patch_shared_layer_sweep.sh
+sbatch run_activation_patch_correct_overlay.sh
 ```
 
-The launcher already defines three array tasks with at most two running at
-once. Each task checkpoints its condition and can resume from its existing
-report.
+The first launcher defines three array tasks with at most two running at once;
+the second runs the correct-answer control. Each checkpoints its report and can
+resume from existing output.
 
 Expected raw outputs under `../layer_sweep_shared_305_outputs/`:
 
@@ -47,10 +52,11 @@ Expected raw outputs under `../layer_sweep_shared_305_outputs/`:
 activation_patch_shared_305_all_layers_misleading_groundable.json
 activation_patch_shared_305_all_layers_misleading_ungroundable.json
 activation_patch_shared_305_all_layers_irrelevant_word.json
+activation_patch_shared_305_all_layers_correct_answer.json
 ```
 
-A complete condition contains 136,576 intervention records. The three
-conditions contain 409,728 records in total.
+A complete condition contains 136,576 intervention records. The four
+conditions contain 546,304 records in total.
 
 ### Run the confirmatory layer-window analysis
 
@@ -67,12 +73,12 @@ No GPU is needed:
 
 ```bash
 cd ../plotting_scripts
-bash run_all_plots.sh
+bash run_full_analysis_all_conditions.sh
 ```
 
-This produces the layer-wise effects, condition comparison, prediction
-transitions, and appendix object-control plots. To regenerate the secondary
-behavioral breakdown:
+This validates and produces four-condition layer-wise effects, condition
+comparisons, prediction transitions, and appendix object-control plots. To
+regenerate the secondary three-condition Fooled-versus-Robust analysis:
 
 ```bash
 bash run_behavior_breakdown.sh

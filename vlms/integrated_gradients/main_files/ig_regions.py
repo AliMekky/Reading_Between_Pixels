@@ -899,7 +899,7 @@
 #     ap = argparse.ArgumentParser()
 
 #     ap.add_argument("--question_id", type=str, default="06199707")
-#     ap.add_argument("--npz", type=str, default="/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/llava-next_ig_token_outputs/misleading_groundable/misleading_groundable/06199707/ig_prefill_next_token.npz")
+#     ap.add_argument("--npz", type=str, default="/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/llava-next_ig_token_outputs/misleading_groundable/misleading_groundable/06199707/ig_prefill_next_token.npz")
 
 #     ap.add_argument(
 #         "--variant",
@@ -2085,7 +2085,7 @@ def main():
     ap = argparse.ArgumentParser()
 
     ap.add_argument("--question_id", type=str, default="06199707")
-    ap.add_argument("--npz", type=str, default="/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/llava-next_ig_token_outputs/misleading_groundable/misleading_groundable/06199707/ig_prefill_next_token.npz")
+    ap.add_argument("--npz", type=str, default="/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/integrated_gradients/llava-next_ig_token_outputs/misleading_groundable/misleading_groundable/06199707/ig_prefill_next_token.npz")
 
     ap.add_argument(
         "--variant",

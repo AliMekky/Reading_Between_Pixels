@@ -9,14 +9,14 @@
 #SBATCH -t 24:00:00
 #SBATCH --array=0-1%2
 #SBATCH --job-name=qwen3_8b_gen_attention
-#SBATCH --output=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/qwen3_vl_generation_causal/attention_intervention/logs/%x_%A_%a.out
-#SBATCH --error=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/qwen3_vl_generation_causal/attention_intervention/logs/%x_%A_%a.err
+#SBATCH --output=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/qwen3_vl_generation_causal/attention_intervention/logs/%x_%A_%a.out
+#SBATCH --error=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/qwen3_vl_generation_causal/attention_intervention/logs/%x_%A_%a.err
 
 set -euo pipefail
 source /apps/local/anaconda3/conda_init.sh
 conda activate text_in_image
 
-ROOT=/nfs-stor/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/qwen3_vl_generation_causal/attention_intervention
+ROOT=/l/users/ali.mekky/reading_between_pixels/Reading_Between_Pixels/vlms/qwen3_vl_generation_causal/attention_intervention
 SELECTION=$ROOT/../../activation_patching/main_files/activation_patch_confirmation_selection_shared_305.json
 VARIANTS=(correct_answer misleading_groundable misleading_ungroundable irrelevant_word)
 SHARD_ID=${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}
