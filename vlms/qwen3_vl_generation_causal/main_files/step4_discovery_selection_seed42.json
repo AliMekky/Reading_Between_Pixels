@@ -1,0 +1,213 @@
+{
+  "status": "frozen",
+  "name": "qwen3_vl_generation_causal_step4_discovery_40",
+  "source_manifest": "<repo>/vlms/activation_patching/main_files/activation_patch_confirmation_selection_shared_305.json",
+  "source_question_count": 305,
+  "sample_count": 40,
+  "seed": 42,
+  "selection_method": "random.Random(42).sample(source_manifest_order, 40)",
+  "selection_used_model_outputs": false,
+  "question_id_sha256": "213a33d7435c8a67477ab4c06ffa0613a64bb8331cf7546195492254ab2ad1bb",
+  "selected_samples": [
+    {
+      "draw_index": 0,
+      "question_id": "15781736",
+      "dataset_index": 106
+    },
+    {
+      "draw_index": 1,
+      "question_id": "0866560",
+      "dataset_index": 20
+    },
+    {
+      "draw_index": 2,
+      "question_id": "06830613",
+      "dataset_index": 256
+    },
+    {
+      "draw_index": 3,
+      "question_id": "0624062",
+      "dataset_index": 231
+    },
+    {
+      "draw_index": 4,
+      "question_id": "19358422",
+      "dataset_index": 208
+    },
+    {
+      "draw_index": 5,
+      "question_id": "1976676",
+      "dataset_index": 130
+    },
+    {
+      "draw_index": 6,
+      "question_id": "18273501",
+      "dataset_index": 96
+    },
+    {
+      "draw_index": 7,
+      "question_id": "0870864",
+      "dataset_index": 442
+    },
+    {
+      "draw_index": 8,
+      "question_id": "03304266",
+      "dataset_index": 82
+    },
+    {
+      "draw_index": 9,
+      "question_id": "06273840",
+      "dataset_index": 469
+    },
+    {
+      "draw_index": 10,
+      "question_id": "10144611",
+      "dataset_index": 369
+    },
+    {
+      "draw_index": 11,
+      "question_id": "13278386",
+      "dataset_index": 28
+    },
+    {
+      "draw_index": 12,
+      "question_id": "05758368",
+      "dataset_index": 26
+    },
+    {
+      "draw_index": 13,
+      "question_id": "0367236",
+      "dataset_index": 90
+    },
+    {
+      "draw_index": 14,
+      "question_id": "171009091",
+      "dataset_index": 202
+    },
+    {
+      "draw_index": 15,
+      "question_id": "15510785",
+      "dataset_index": 220
+    },
+    {
+      "draw_index": 16,
+      "question_id": "10981814",
+      "dataset_index": 419
+    },
+    {
+      "draw_index": 17,
+      "question_id": "01542931",
+      "dataset_index": 22
+    },
+    {
+      "draw_index": 18,
+      "question_id": "0735845",
+      "dataset_index": 451
+    },
+    {
+      "draw_index": 19,
+      "question_id": "10720200",
+      "dataset_index": 182
+    },
+    {
+      "draw_index": 20,
+      "question_id": "12169315",
+      "dataset_index": 366
+    },
+    {
+      "draw_index": 21,
+      "question_id": "15675843",
+      "dataset_index": 203
+    },
+    {
+      "draw_index": 22,
+      "question_id": "18896153",
+      "dataset_index": 388
+    },
+    {
+      "draw_index": 23,
+      "question_id": "02824734",
+      "dataset_index": 467
+    },
+    {
+      "draw_index": 24,
+      "question_id": "15437595",
+      "dataset_index": 259
+    },
+    {
+      "draw_index": 25,
+      "question_id": "15487886",
+      "dataset_index": 6
+    },
+    {
+      "draw_index": 26,
+      "question_id": "0182020",
+      "dataset_index": 148
+    },
+    {
+      "draw_index": 27,
+      "question_id": "09207961",
+      "dataset_index": 310
+    },
+    {
+      "draw_index": 28,
+      "question_id": "1827790",
+      "dataset_index": 146
+    },
+    {
+      "draw_index": 29,
+      "question_id": "03434840",
+      "dataset_index": 201
+    },
+    {
+      "draw_index": 30,
+      "question_id": "00167842",
+      "dataset_index": 307
+    },
+    {
+      "draw_index": 31,
+      "question_id": "03126994",
+      "dataset_index": 342
+    },
+    {
+      "draw_index": 32,
+      "question_id": "06958697",
+      "dataset_index": 93
+    },
+    {
+      "draw_index": 33,
+      "question_id": "11714119",
+      "dataset_index": 325
+    },
+    {
+      "draw_index": 34,
+      "question_id": "02588373",
+      "dataset_index": 315
+    },
+    {
+      "draw_index": 35,
+      "question_id": "05334777",
+      "dataset_index": 250
+    },
+    {
+      "draw_index": 36,
+      "question_id": "16922131",
+      "dataset_index": 38
+    },
+    {
+      "draw_index": 37,
+      "question_id": "17845553",
+      "dataset_index": 395
+    },
+    {
+      "draw_index": 38,
+      "question_id": "07383083",
+      "dataset_index": 437
+    },
+    {
+      "draw_index": 39,
+      "question_id": "17939409",
+      "dataset_index": 119
+    }
+  ]
+}

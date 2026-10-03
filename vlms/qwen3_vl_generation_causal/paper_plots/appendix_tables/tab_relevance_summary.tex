@@ -1,0 +1,29 @@
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrr}
+\toprule
+Candidate & Question only & Image boost & Overlay boost & Final score \\
+\midrule
+Correct & $-$12.67 & 9.63 [8.89, 10.40] & 1.98 [1.63, 2.36] & $-$1.06 \\
+Grounded misleading & $-$16.69 & 4.70 [3.97, 5.41] & 5.61 [5.04, 6.21] & $-$6.38 \\
+Ungrounded misleading & $-$13.80 & 2.23 [1.47, 2.98] & 6.29 [5.72, 6.87] & $-$5.29 \\
+Irrelevant & $-$25.30 & 2.78 [2.19, 3.36] & 5.59 [5.02, 6.19] & $-$16.93 \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.6em}
+\begin{tabular}{lrr}
+\toprule
+Candidate & Positive overlay boost & Median margin vs.\ correct (clean $\rightarrow$ overlay) \\
+\midrule
+Correct & 281/305 & \multicolumn{1}{c}{--} \\
+Grounded misleading & 299/305 & $-$8.58 $\rightarrow$ $-$2.39 \\
+Ungrounded misleading & 299/305 & $-$8.37 $\rightarrow$ $-$1.60 \\
+Irrelevant & 296/305 & $-$20.29 $\rightarrow$ $-$13.73 \\
+\bottomrule
+\end{tabular}
+\caption{Candidate-answer support in Qwen3-VL-8B (305 questions; mean log-probability per answer token, nats/token; EOS excluded). Question only: no image tokens. Image boost: clean scene minus question only. Overlay boost: the candidate's own overlay minus the clean scene. Final score: under the candidate's own overlay (question only + image boost + overlay boost, up to rounding). Brackets: question-bootstrap 95\% CI (10{,}000 resamples). Bottom: number of questions whose overlay boost is positive, and the median of the candidate-minus-correct score margin in the clean scene and under the candidate's own overlay (negative = behind the correct answer).}
+\label{tab:relevance-summary}
+\end{table*}

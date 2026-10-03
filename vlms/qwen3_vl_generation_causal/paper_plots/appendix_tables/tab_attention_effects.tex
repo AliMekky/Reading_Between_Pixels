@@ -1,0 +1,18 @@
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrrrr}
+\toprule
+Path & Layers & Correct & Grounded & Ungrounded & Irrelevant \\
+\midrule
+T$\rightarrow$Q & 12--17 & 0.15 [0.11, 0.18]$^{*}$ & 0.10 [0.04, 0.16]$^{*}$ & 0.21 [0.15, 0.27]$^{*}$ & 0.05 [0.01, 0.09]\phantom{$^{*}$} \\
+T$\rightarrow$Q & 18--23 & 0.16 [0.12, 0.21]$^{*}$ & 0.15 [0.10, 0.22]$^{*}$ & 0.23 [0.17, 0.29]$^{*}$ & 0.09 [0.05, 0.15]\phantom{$^{*}$} \\
+T$\rightarrow$A & 30--35 & 0.83 [0.68, 1.00]$^{*}$ & 2.07 [1.78, 2.37]$^{*}$ & 2.02 [1.76, 2.30]$^{*}$ & 2.07 [1.80, 2.34]$^{*}$ \\
+Q$\rightarrow$A & 18--23 & $-$1.02 [$-$1.16, $-$0.89]$^{*}$ & $-$1.83 [$-$2.07, $-$1.61]$^{*}$ & $-$1.76 [$-$1.99, $-$1.56]$^{*}$ & $-$2.32 [$-$2.64, $-$2.01]$^{*}$ \\
+C$\rightarrow$A & 30--35 & $-$0.47 [$-$0.56, $-$0.38]$^{*}$ & $-$0.26 [$-$0.33, $-$0.19]$^{*}$ & $-$0.31 [$-$0.38, $-$0.25]$^{*}$ & $-$0.31 [$-$0.38, $-$0.23]$^{*}$ \\
+\bottomrule
+\end{tabular}
+\caption{Effects of blocking selected attention pathways in Qwen3-VL-8B (305 questions; $n{=}279$--$283$ for C$\rightarrow$A, where a clean correct-object region exists). Each value is the change in the correct-versus-displayed complete-answer margin (nats/token) caused by blocking attention from the source to the destination tokens in a six-layer window, with the paired no-text effect subtracted; positive values mean blocking removes the overlay's influence (sign reversed for the correct overlay so that positive again means removing the text's effect). T: text region; Q: question tokens; A: answer positions; C: correct-object region. Brackets: question-bootstrap 95\% CI. $^{*}$Holm-adjusted $p<0.05$ within overlay condition.}
+\label{tab:attention-effects}
+\end{table*}

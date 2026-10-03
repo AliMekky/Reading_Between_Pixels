@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+**/logs/
+# Generated outputs (rebuild with paper_plots/make_all.sh)
+vlms/qwen3_vl_generation_causal/paper_plots/figures/
+vlms/qwen3_vl_generation_causal/paper_plots/appendix_figures/*.pdf
+vlms/qwen3_vl_generation_causal/paper_plots/appendix_figures/*.png
+vlms/qwen3_vl_generation_causal/paper_plots/appendix_figures/*.svg
+# Extracted dataset (ship as dataset/GUTIC_dataset.tar.part_*)
+vlms/activation_patching/hf_dataset_GUIC_cleaned/
